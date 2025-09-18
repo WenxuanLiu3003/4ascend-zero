@@ -10,7 +10,7 @@ class RulesConfig:
     max_turns: int = 15 * 15           # 达到后终局（也可改为判和等）
 
     # HP 相关（用于状态编码归一化）
-    hp_max: int = 10
+    hp_max: int = 6
 
     # 攻防结算数值（示例，可按 4ascend 规则自行调参/替换）
     ad_attacker_hp_delta_on_fail: int = -1

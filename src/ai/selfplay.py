@@ -48,9 +48,9 @@ class SelfPlay:
 
         while not s.is_terminal():
             if self.use_tree_reuse:
-                pi, root = mcts.run(s, prev_root=prev_root, last_action=last_action)
+                pi, root = mcts.run(s, prev_root=prev_root, last_action=last_action, turn_related_sim=30, turn_related_sim_coef=0.5)
             else:
-                pi, root = pi, root = mcts.run(s)
+                pi, root = pi, root = mcts.run(s, turn_related_sim=30, turn_related_sim_coef=0.5)
 
             planes = self.encoder.encode(s, as_player=s.to_play)  # [C,H,W]
 

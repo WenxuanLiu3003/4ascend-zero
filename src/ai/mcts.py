@@ -113,7 +113,9 @@ class MCTS:
     # ----------------------------------------------------------------------
     def run(self, root_state: GameState,
             prev_root: Optional[Node] = None,
-            last_action: Optional[int] = None) -> Tuple[np.ndarray, Node]:
+            last_action: Optional[int] = None,
+            turn_related_sim: Optional[int] = -1, 
+            turn_related_sim_coef: Optional[int] = 0.5) -> Tuple[np.ndarray, Node]:
         root_player = root_state.to_play
 
         # —— 根构建（可选复用）——
@@ -133,7 +135,10 @@ class MCTS:
             child.prior = (1 - self.dir_eps) * child.prior + self.dir_eps * float(noise[a])
 
         # —— 执行多次模拟 —— 
-        for _ in range(self.sims):
+        num_sim = self.sims
+        if turn_related_sim > 0 and root_state.turn >= turn_related_sim:
+            num_sim = int(self.sims * turn_related_sim_coef)
+        for _ in range(num_sim):
             self._simulate(root_state, root)
 
         # —— 访问频次 → π —— 

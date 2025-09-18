@@ -76,7 +76,7 @@ def generate_selfplay_trace(cfg: RulesConfig, model: PolicyValueNet, device: str
     step_idx = 0
     while not state.is_terminal():
         # 搜索：根据是否复用树选择调用方式
-        pi, _ = mcts.run(state)
+        pi, _ = mcts.run(state, turn_related_sim=30, turn_related_sim_coef=0.5)
 
         # 再次用实时合法掩码过滤 π，确保安全
         legal_mask = (state.board.grid == 0).astype(np.float32).reshape(-1)

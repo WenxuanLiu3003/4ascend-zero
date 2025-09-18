@@ -252,14 +252,18 @@ class Engine:
           - force=True ：无视步数立即刷新；
           - 刷新位置：空位且 plants<2；随机等概率挑选不同位置至多 2 个，各 +1（封顶 2）。
         """
-        flower_num = 0
-        if not force:
-            if s.turn in [11,22,31,40]:
-                flower_num = 2
-            elif s.turn >= 49 and (s.turn - 49) % 3 == 0:
-                flower_num = 3
-            else:
-                return
+        # flower_num = 0
+        # if not force:
+        #     if s.turn in [11,22,31,40]:
+        #         flower_num = 2
+        #     elif s.turn >= 49 and (s.turn - 49) % 3 == 0:
+        #         flower_num = 3
+        #     else:
+        #         return
+        if s.turn < 50 or s.turn % 20 != 0:
+            return
+        else:
+            flower_num = 2
 
         board = s.board
         size = board.size

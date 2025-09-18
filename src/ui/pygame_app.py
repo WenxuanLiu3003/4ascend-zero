@@ -134,7 +134,7 @@ def draw_board(screen, state: GameState):
 def main():
     pygame.init()
     # 配置规则
-    cfg = RulesConfig(board_size=9, win_k=4, hp_max=10)
+    cfg = RulesConfig(board_size=9, win_k=4, hp_max=6)
     board = Board(cfg.board_size)
     state = GameState(cfg=cfg, board=board)
     engine = Engine(win_k=cfg.win_k)
