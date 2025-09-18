@@ -1,0 +1,11 @@
+numpy
+scipy
+networkx
+pydantic
+pygame
+matplotlib
+pillow
+dataclasses-json
+rich
+typer
+pytest
