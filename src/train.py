@@ -196,4 +196,4 @@ if __name__ == "__main__":
                             shaped_reward_enabled=True,   # ← 打开/关闭 奖励塑形
                             shaped_reward_coeff=0.05,     # ← 微奖励系数 λ
                             reuse_tree=False)             # ← 是否根复用（默认关闭）
-    trainer.train_loop(epochs=200, games_per_epoch=16, sims=400, batch_size=64)
+    trainer.train_loop(epochs=200, games_per_epoch=16, sims=400, batch_size=32)

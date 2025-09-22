@@ -223,8 +223,14 @@ class MCTS:
     # ----------------------------------------------------------------------
     def _backup(self, path, value: float):
         v = value
-        for node, _ in reversed(path):
-            node.N += 1
-            node.W += v
-            node.Q = node.W / node.N
-            v = -v  # 轮到对手视角，符号翻转
+        # for node, _ in reversed(path):
+        #     node.N += 1
+        #     node.W += v
+        #     node.Q = node.W / node.N
+        #     v = -v  # 轮到对手视角，符号翻转
+        for parent, a in reversed(path):
+            child = parent.children[a]
+            child.N += 1
+            child.W += v
+            child.Q = child.W / child.N
+            v = -v

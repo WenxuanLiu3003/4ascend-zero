@@ -65,44 +65,8 @@ def generate_selfplay_trace(cfg: RulesConfig, model: PolicyValueNet, device: str
     # 初始状态
     state = GameState(cfg=cfg, board=Board(size))
     trace: List[TraceStep] = []
-    prev_plants = None
 
-    # MCTS 对象（每手都会复用同一个实例，但可选择是否复用根）
-    mcts = MCTS(model, encoder, engine, board_size=size, c_puct=2.0, sims=sims,
-                dirichlet_alpha=dir_alpha, dirichlet_eps=dir_eps, device=device)
-    prev_root = None
-    last_action = None
-
-    step_idx = 0
-    while not state.is_terminal():
-        # 搜索：根据是否复用树选择调用方式
-        pi, _ = mcts.run(state, turn_related_sim=30, turn_related_sim_coef=0.5)
-
-        # 再次用实时合法掩码过滤 π，确保安全
-        legal_mask = (state.board.grid == 0).astype(np.float32).reshape(-1)
-        pi = pi * legal_mask
-        ssum = pi.sum()
-        if ssum <= 1e-8:
-            break
-        pi /= ssum
-
-        # 温度：前 temp_steps 采样，之后 argmax
-        if step_idx < temp_steps:
-            a = int(np.random.choice(size * size, p=pi))
-        else:
-            a = int(np.argmax(pi))
-        r, c = divmod(a, size)
-        # 防御式回退
-        if state.board.grid[r, c] != 0:
-            legal_indices = np.where(legal_mask > 0)[0]
-            if legal_indices.size == 0:
-                break
-            a = int(legal_indices[np.argmax(pi[legal_indices])])
-            r, c = divmod(a, size)
-            if state.board.grid[r, c] != 0:
-                break
-
-        # 记录“当前帧”之前的静态信息（用于在这一步走子前展示现状）
+    def snapshot(prev_plants: Optional[np.ndarray]) -> Tuple[TraceStep, np.ndarray]:
         step = TraceStep(
             turn=state.turn,
             to_play=1 if state.to_play is Player.BLACK else 2,
@@ -114,28 +78,104 @@ def generate_selfplay_trace(cfg: RulesConfig, model: PolicyValueNet, device: str
             attack_chain_mask=(state.attack_chain_mask.copy() if state.attack_chain_mask is not None else None),
             plant_events=_detect_plant_events(prev_plants, state.board.plants),
         )
-        trace.append(step)
-        prev_plants = state.board.plants.copy()
+        return step, state.board.plants.copy()
+
+    # 记录开局第一帧
+    prev_plants = None
+    step0, prev_plants = snapshot(prev_plants)
+    trace.append(step0)
+
+
+    # MCTS 对象（每手都会复用同一个实例，但可选择是否复用根）
+    mcts = MCTS(model, encoder, engine, board_size=size, c_puct=2.0, sims=sims,
+                dirichlet_alpha=dir_alpha, dirichlet_eps=dir_eps, device=device)
+    prev_root = None
+    last_action = None
+
+    step_idx = 0
+    while not state.is_terminal():
+        # 搜索：根据是否复用树选择调用方式
+        if use_tree_reuse:
+            pi, root = mcts.run(state, prev_root=prev_root, last_action=last_action)
+        else:
+            pi, root = mcts.run(state, turn_related_sim=40, turn_related_sim_coef=0.5)
+
+        # 再次用实时合法掩码过滤 π，确保安全
+        legal_mask = (state.board.grid == 0).astype(np.float32).reshape(-1)
+        pi = pi * legal_mask
+        ssum = pi.sum()
+        # if ssum <= 1e-8:
+        #     print("Warning: the output of MCTS has near-zero probability.")
+        #     break
+        pi /= ssum
+
+        # 温度：前 temp_steps 采样，之后 argmax
+        if step_idx < temp_steps:
+            a = int(np.random.choice(size * size, p=pi))
+        else:
+            a = int(np.argmax(pi))
+        r, c = divmod(a, size)
+        # 防御式回退
+        if state.board.grid[r, c] != 0:
+            print("Warning: engine.step outputs an illegal action")
+            legal_indices = np.where(legal_mask > 0)[0]
+            if legal_indices.size == 0:
+                break
+            a = int(legal_indices[np.argmax(pi[legal_indices])])
+            r, c = divmod(a, size)
+            if state.board.grid[r, c] != 0:
+                break
+
+        # # 记录“当前帧”之前的静态信息（用于在这一步走子前展示现状）
+        # step = TraceStep(
+        #     turn=state.turn,
+        #     to_play=1 if state.to_play is Player.BLACK else 2,
+        #     last_move=(state.last_move.r, state.last_move.c) if state.last_move else None,
+        #     grid=state.board.grid.copy(),
+        #     plants=state.board.plants.copy(),
+        #     hp=(int(state.hp[0]), int(state.hp[1])),
+        #     phase=state.phase.name,
+        #     attack_chain_mask=(state.attack_chain_mask.copy() if state.attack_chain_mask is not None else None),
+        #     plant_events=_detect_plant_events(prev_plants, state.board.plants),
+        # )
+        # trace.append(step)
+        # prev_plants = state.board.plants.copy()
 
         # 真正落子前进
         state = engine.step(state, Move(r, c))
         step_idx += 1
 
+        # 立即记录落子后的新局面
+        step_now, prev_plants = snapshot(prev_plants)
+        trace.append(step_now)
+
         # 树复用需要的上下文
         prev_root, last_action = (root, a) if use_tree_reuse else (None, None)
 
-    # 最后一帧（终局态）
-    step = TraceStep(
-        turn=state.turn,
-        to_play=1 if state.to_play is Player.BLACK else 2,
-        last_move=(state.last_move.r, state.last_move.c) if state.last_move else None,
-        grid=state.board.grid.copy(),
-        plants=state.board.plants.copy(),
-        hp=(int(state.hp[0]), int(state.hp[1])),
-        phase=state.phase.name,
-        attack_chain_mask=(state.attack_chain_mask.copy() if state.attack_chain_mask is not None else None),
-        plant_events=_detect_plant_events(prev_plants, state.board.plants),
-    )
-    trace.append(step)
+    # # 最后一帧（终局态）
+    # step = TraceStep(
+    #     turn=state.turn,
+    #     to_play=1 if state.to_play is Player.BLACK else 2,
+    #     last_move=(state.last_move.r, state.last_move.c) if state.last_move else None,
+    #     grid=state.board.grid.copy(),
+    #     plants=state.board.plants.copy(),
+    #     hp=(int(state.hp[0]), int(state.hp[1])),
+    #     phase=state.phase.name,
+    #     attack_chain_mask=(state.attack_chain_mask.copy() if state.attack_chain_mask is not None else None),
+    #     plant_events=_detect_plant_events(prev_plants, state.board.plants),
+    # )
+    # trace.append(step)
+
+    # print("length of trace: %d" % len(trace))
+    # print("the last turn in last state is %d" % state.turn)
+
+
+    # if (len(trace) == 0 or
+    #     trace[-1].turn != state.turn or
+    #     (trace[-1].last_move != (state.last_move.r, state.last_move.c) if state.last_move else trace[-1].last_move is not None) or
+    #     trace[-1].phase != state.phase.name):
+    #     print("enter the final step")
+    # step_last, _ = snapshot(prev_plants)
+    # trace.append(step_last)
 
     return trace
