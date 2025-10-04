@@ -35,7 +35,7 @@ class AZLiteTrainer:
 
         self.model = PolicyValueNet(in_planes=self.encoder.num_planes, board_size=board_size).to(device)
         self.model.eval()
-        self.opt = optim.Adam(self.model.parameters(), lr=3e-4, weight_decay=1e-4)
+        self.opt = optim.Adam(self.model.parameters(), lr=1e-3, weight_decay=1e-4)
         self.ce = nn.KLDivLoss(reduction='batchmean')
         self.mse = nn.MSELoss()
 
@@ -196,4 +196,4 @@ if __name__ == "__main__":
                             shaped_reward_enabled=True,   # ← 打开/关闭 奖励塑形
                             shaped_reward_coeff=0.05,     # ← 微奖励系数 λ
                             reuse_tree=False)             # ← 是否根复用（默认关闭）
-    trainer.train_loop(epochs=200, games_per_epoch=16, sims=400, batch_size=32)
+    trainer.train_loop(epochs=200, games_per_epoch=12, sims=300, batch_size=32)
