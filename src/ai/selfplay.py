@@ -109,7 +109,7 @@ class SelfPlay:
             loser_idx = 0 if s.hp[0] <= 0 else 1
         else:
             if s.hp[0] < s.hp[1]: loser_idx = 0
-            elif s.hp[0] < s.hp[1]: loser_idx = 1
+            elif s.hp[1] < s.hp[0]: loser_idx = 1
             else: loser_idx = -1  # 平局
         cur_player = init_state.to_play
         for i in range(len(data)):
