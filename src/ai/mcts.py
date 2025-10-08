@@ -47,7 +47,7 @@ class MCTS:
                  board_size: int = 9,
                  c_puct: float = 2.0,
                  sims: int = 400,
-                 dirichlet_alpha: float = 0.3,
+                 dirichlet_alpha: float = 0.35,
                  dirichlet_eps: float = 0.25,
                  device: str = "cpu",
                  reuse_tree: bool = False):
