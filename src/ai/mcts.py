@@ -125,7 +125,7 @@ class MCTS:
         else:
             # 新建根并按网络策略扩展一次
             root = Node(prior=1.0, to_play=root_player)
-            p, _ = self._policy_value(root_state, as_player=root_player)
+            p, v = self._policy_value(root_state, as_player=root_player)
             self._expand(root, root_state, p)
 
         # —— 根注入 Dirichlet 噪声（鼓励探索）——

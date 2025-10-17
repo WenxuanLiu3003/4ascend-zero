@@ -50,7 +50,10 @@ class SelfPlay:
             if self.use_tree_reuse:
                 pi, root = mcts.run(s, prev_root=prev_root, last_action=last_action, turn_related_sim=40, turn_related_sim_coef=0.5)
             else:
-                pi, root = mcts.run(s, turn_related_sim=40, turn_related_sim_coef=0.5)
+                pi, root = mcts.run(s, turn_related_sim=-1, turn_related_sim_coef=0.5)
+
+            # print("----------------pi for %s--------------------" % (s.to_play.name,))
+            # print(pi)
 
             planes = self.encoder.encode(s, as_player=s.to_play)  # [C,H,W]
 

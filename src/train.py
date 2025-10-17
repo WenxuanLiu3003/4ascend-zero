@@ -9,6 +9,7 @@ import torch.nn as nn
 import torch.optim as optim
 from tqdm import tqdm
 import multiprocessing as mp
+from .core.types import Player
 
 from .core.rules import RulesConfig
 from .core.board import Board
@@ -67,7 +68,7 @@ class AZLiteTrainer:
                       use_tree_reuse=self.reuse_tree)
         dataset = []
         for _ in tqdm(range(games), desc="Self-play games", unit="game"):
-            s = GameState(cfg=self.cfg, board=Board(self.cfg.board_size))
+            s = GameState(cfg=self.cfg, board=Board(self.cfg.board_size), to_play=random.choice(list(Player)))
             data = sp.play_one(s)  # 返回 (planes, pi, z, aux_r)
             for sample in data:
                 dataset.extend(SelfPlay.augment(sample))  # 也返回四元组
@@ -196,4 +197,4 @@ if __name__ == "__main__":
                             shaped_reward_enabled=False,   # ← 打开/关闭 奖励塑形
                             shaped_reward_coeff=0.05,     # ← 微奖励系数 λ
                             reuse_tree=False)             # ← 是否根复用（默认关闭）
-    trainer.train_loop(epochs=200, games_per_epoch=16, sims=400, batch_size=64)
+    trainer.train_loop(epochs=200, games_per_epoch=24, sims=400, batch_size=64)
