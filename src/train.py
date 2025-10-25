@@ -36,7 +36,7 @@ class AZLiteTrainer:
 
         self.model = PolicyValueNet(in_planes=self.encoder.num_planes, board_size=board_size).to(device)
         self.model.eval()
-        self.opt = optim.Adam(self.model.parameters(), lr=3e-4, weight_decay=1e-4)
+        self.opt = optim.Adam(self.model.parameters(), lr=0.02, weight_decay=1e-4)
         self.ce = nn.KLDivLoss(reduction='batchmean')
         self.mse = nn.MSELoss()
 
@@ -73,6 +73,7 @@ class AZLiteTrainer:
             for sample in data:
                 dataset.extend(SelfPlay.augment(sample))  # 也返回四元组
         random.shuffle(dataset)
+        print("length of dataset: %d" % len(dataset))
         return dataset
 
     # —— 多进程 worker —— #
@@ -179,10 +180,10 @@ class AZLiteTrainer:
                 #     last_save_t = now
 
                 # 每个 epoch 也落一个
-                if ep % 10 == 9:
-                    path = os.path.join(self.save_dir, f"ckpt_ep{ep+1}_step{self.global_step}.pt")
-                    save_checkpoint(path, self.model, self.opt, global_step=self.global_step)
-                    print(f"[train] checkpoint saved (epoch end): {path}")
+                # if ep % 10 == 9:
+                path = os.path.join(self.save_dir, f"ckpt_ep{ep+1}_step{self.global_step}.pt")
+                save_checkpoint(path, self.model, self.opt, global_step=self.global_step)
+                print(f"[train] checkpoint saved (epoch end): {path}")
         except KeyboardInterrupt:
             path = os.path.join(self.save_dir, f"ckpt_interrupt_step{self.global_step}.pt")
             save_checkpoint(path, self.model, self.opt, global_step=self.global_step)
@@ -197,4 +198,4 @@ if __name__ == "__main__":
                             shaped_reward_enabled=False,   # ← 打开/关闭 奖励塑形
                             shaped_reward_coeff=0.05,     # ← 微奖励系数 λ
                             reuse_tree=False)             # ← 是否根复用（默认关闭）
-    trainer.train_loop(epochs=200, games_per_epoch=24, sims=400, batch_size=64)
+    trainer.train_loop(epochs=1, games_per_epoch=200, sims=800, batch_size=256)

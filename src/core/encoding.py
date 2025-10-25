@@ -59,6 +59,7 @@ class AlphaZeroStateEncoder:
         planes.extend([me, opp, empty])
 
         # —— 植物：数量 + 存在二值 ——
+        # TODO: Only involve plants_count
         plants_count = s.board.plants.astype(np.float32)
         plants_mask = (s.board.plants > 0).astype(np.float32)
         planes.extend([plants_count, plants_mask])
@@ -71,6 +72,7 @@ class AlphaZeroStateEncoder:
         # —— 历史 k 步：逐方逐步（我方 recent1..4；对方 recent1..4）——
         # 根据全局步号 s.turn 推断每一手的落子方：第 i 手由 _player_of_move_index(i) 决定
         # 自末尾向前取 last_k 手，分别写入对应的我方/对方通道
+        # TODO: modify from "move position" to "state positions" in me_hist and opp_hist, let them be [X_t, Y_t, X_{t-1},...]
         me_hist = [np.zeros((H, W), dtype=np.float32) for _ in range(self.last_k)]
         opp_hist = [np.zeros((H, W), dtype=np.float32) for _ in range(self.last_k)]
         for j in range(1, self.last_k + 1):
@@ -105,6 +107,7 @@ class AlphaZeroStateEncoder:
         planes.append(attack_mask)
 
         # —— 进度与奇偶 ——
+        # TODO: remove turn_move, remove parity
         turn_norm = np.full((H, W), float(s.turn) / max(1, s.cfg.max_turns), dtype=np.float32)
         parity = np.full((H, W), 1.0 if (s.turn % 2) == 0 else 0.0, dtype=np.float32)
         planes.extend([turn_norm, parity])

@@ -53,7 +53,8 @@ class SelfPlay:
                 pi, root = mcts.run(s, turn_related_sim=-1, turn_related_sim_coef=0.5)
 
             # print("----------------pi for %s--------------------" % (s.to_play.name,))
-            # print(pi)
+            # print(pi, end=' ')
+            # print("max_prob=%.4f" % max(pi))
 
             planes = self.encoder.encode(s, as_player=s.to_play)  # [C,H,W]
 
