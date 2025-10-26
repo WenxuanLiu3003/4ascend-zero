@@ -18,6 +18,7 @@ from .core.engine import Engine
 from .core.encoding import AlphaZeroStateEncoder
 from .ai.model import PolicyValueNet
 from .ai.selfplay import SelfPlay
+import argparse
 from .utils.checkpoint import (
     ensure_dir, latest_checkpoint_path, save_checkpoint, load_checkpoint,
 )
@@ -194,11 +195,19 @@ class AZLiteTrainer:
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="training parameters")
+    parser.add_argument('--epoch', type=int, default=1, help='Number of training epochs')
+    parser.add_argument('--sim', type=int, default=1000, help='Number of simulations')
+    parser.add_argument('--savePath', type=str, default="checkpoints", help='model path')
+    parser.add_argument('--game', type=int, default=500, help='Number of games per epoch')
+    parser.add_argument('--batch', type=int, default=256, help='Number of batch')
+    args = parser.parse_args()
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     trainer = AZLiteTrainer(board_size=9, win_k=4, hp_max=6, device=device,
-                            save_dir="checkpoints", save_every_sec=300,
+                            save_dir=args.savePath, save_every_sec=300,
                             num_workers=0,
                             shaped_reward_enabled=False,   # ← 打开/关闭 奖励塑形
                             shaped_reward_coeff=0.05,     # ← 微奖励系数 λ
                             reuse_tree=False)             # ← 是否根复用（默认关闭）
-    trainer.train_loop(epochs=1, games_per_epoch=200, sims=1000, batch_size=256)
+    trainer.train_loop(epochs=args.epoch, games_per_epoch=args.game, sims=args.sim, batch_size=args.batch)
