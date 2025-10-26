@@ -46,18 +46,20 @@ class Engine:
           - ATTACK_DEFENSE：防守方落子 → 依据 a,b,c,d 规则结算 → 清除参与植物 → 回到 NORMAL 并强制刷新植物。
         """
         ns = s.copy()
+        # record board state
+        ns.last_moves.append(ns.board.grid.copy())
 
         if ns.phase is Phase.NORMAL:
             # 当前执手下子
             self._place_stone_or_raise(ns, move, ns.to_play)
             ns.last_move = move
-            ns.last_moves.append(move)
+            # ns.last_moves.append(move)
 
             # 计算以该落点为锚的所有四连（去重合集）
             atk_cells = self._collect_four_chains(ns.board, move, player_id=self._pid(ns.to_play))
 
             if atk_cells:
-                # 进入攻防：先把攻方链上的棋子从棋盘上移除（按规则）
+                # 进入ascend：先把攻方链上的棋子从棋盘上移除（按规则）
                 self._remove_stones(ns.board, atk_cells)
 
                 # 用 mask 表达攻方链（供 UI/编码/结算使用）
@@ -66,7 +68,7 @@ class Engine:
                     mask[r, c] = 1
                 ns.attack_chain_mask = mask
 
-                # 阶段切换到 ATTACK_DEFENSE，轮到防守方应手
+                # 阶段切换到 ascend，轮到防守方应手
                 ns.phase = Phase.ATTACK_DEFENSE
                 ns.to_play = _other(ns.to_play)
             else:
@@ -81,7 +83,7 @@ class Engine:
             # 防守方下子
             self._place_stone_or_raise(ns, move, defender)
             ns.last_move = move
-            ns.last_moves.append(move)
+            # ns.last_moves.append(move)
 
             # 以防守方落点为锚，收集防守方四连（可能为空）
             def_cells = self._collect_four_chains(ns.board, move, player_id=self._pid(defender))

@@ -23,7 +23,7 @@ from .utils.checkpoint import (
 )
 
 class AZLiteTrainer:
-    def __init__(self, board_size=9, win_k=4, hp_max=20, device="cpu",
+    def __init__(self, board_size=9, win_k=4, hp_max=6, device="cpu",
                  save_dir: str = "checkpoints", save_every_sec: int = 300,
                  num_workers: int = 0,
                  shaped_reward_enabled: bool = False,
@@ -31,10 +31,11 @@ class AZLiteTrainer:
                  reuse_tree: bool = False):
         self.cfg = RulesConfig(board_size=board_size, win_k=win_k, hp_max=hp_max)
         self.engine = Engine(win_k=self.cfg.win_k)
-        self.encoder = AlphaZeroStateEncoder(last_k=4)
+        self.encoder = AlphaZeroStateEncoder(last_k=8)
         self.device = device
 
         self.model = PolicyValueNet(in_planes=self.encoder.num_planes, board_size=board_size).to(device)
+        print("trainable parameters: %d" % sum(p.numel() for p in self.model.parameters() if p.requires_grad) )
         self.model.eval()
         self.opt = optim.Adam(self.model.parameters(), lr=0.02, weight_decay=1e-4)
         self.ce = nn.KLDivLoss(reduction='batchmean')
@@ -68,7 +69,7 @@ class AZLiteTrainer:
                       use_tree_reuse=self.reuse_tree)
         dataset = []
         for _ in tqdm(range(games), desc="Self-play games", unit="game"):
-            s = GameState(cfg=self.cfg, board=Board(self.cfg.board_size), to_play=random.choice(list(Player)))
+            s = GameState(cfg=self.cfg, board=Board(self.cfg.board_size), to_play=Player.BLACK)
             data = sp.play_one(s)  # 返回 (planes, pi, z, aux_r)
             for sample in data:
                 dataset.extend(SelfPlay.augment(sample))  # 也返回四元组
@@ -80,7 +81,7 @@ class AZLiteTrainer:
     @staticmethod
     def _worker_self_play(payload):
         state_dict, cfg_dict, sims, reuse_tree = payload
-        encoder = AlphaZeroStateEncoder(last_k=4)
+        encoder = AlphaZeroStateEncoder(last_k=8)
         engine = Engine(win_k=cfg_dict['win_k'])
         model = PolicyValueNet(in_planes=encoder.num_planes, board_size=cfg_dict['board_size']).to('cpu')
         model.load_state_dict(state_dict)
@@ -172,6 +173,8 @@ class AZLiteTrainer:
                 print(f"[train] Epoch {ep+1}/{epochs}: self-play generating...")
                 self.self_play_and_train_epoch(games_per_epoch, sims, batch_size)
 
+                # TODO: modify the training method by selfPlay with last epoch. If win > 50% then update the parameters, otherwise do not update.
+
                 # now = time.time()
                 # if now - last_save_t >= self.save_every_sec:
                 #     path = os.path.join(self.save_dir, f"ckpt_step{self.global_step}.pt")
@@ -198,4 +201,4 @@ if __name__ == "__main__":
                             shaped_reward_enabled=False,   # ← 打开/关闭 奖励塑形
                             shaped_reward_coeff=0.05,     # ← 微奖励系数 λ
                             reuse_tree=False)             # ← 是否根复用（默认关闭）
-    trainer.train_loop(epochs=1, games_per_epoch=200, sims=800, batch_size=256)
+    trainer.train_loop(epochs=1, games_per_epoch=200, sims=1000, batch_size=256)

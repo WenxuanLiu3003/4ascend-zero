@@ -56,7 +56,7 @@ def generate_selfplay_trace(cfg: RulesConfig, model: PolicyValueNet, device: str
     - 每一步都会保存：棋子、植物、HP、阶段、攻方掩码、落点，以及基于植物矩阵前后差分的事件（刷新/清除）。
     """
     engine = Engine(win_k=cfg.win_k)
-    encoder = AlphaZeroStateEncoder(last_k=4)
+    encoder = AlphaZeroStateEncoder(last_k=8)
     size = cfg.board_size
 
     # 进入推理模式以提速

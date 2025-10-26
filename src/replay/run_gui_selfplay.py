@@ -17,7 +17,7 @@ def main():
 
     # 构建模型（输入通道数需与编码器一致）
     from ..core.encoding import AlphaZeroStateEncoder
-    encoder = AlphaZeroStateEncoder(last_k=4)
+    encoder = AlphaZeroStateEncoder(last_k=8)
     model = PolicyValueNet(in_planes=encoder.num_planes, board_size=cfg.board_size).to(device)
 
     # 加载最新 checkpoint（若存在）
