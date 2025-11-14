@@ -11,6 +11,45 @@ The project combines:
 The goal is to train an agent capable of mastering both **positional tactics** and **strategic resource control** under a stochastic environment.
 
 ---
+## How to use the code for training?
+clone the `new-model` branch from repo
+```
+git clone -b new-model https://github.com/WenxuanLiu3003/4ascend-zero.git
+```
+Go to the project directory and setup your own environment and install required packages
+```
+pip install -r requirements.txt
+```
+Create a new directory to save the checkpoint models:
+```
+mkdir checkpoints
+```
+
+Then you can use the following command to train:
+```
+python -m src.train
+```
+We also provides the following command parameters to adjust the training parameters
+```
+--epoch=1: the training epoch
+--sim=1000: number of simulations for each step in selfplaying
+--game=500: number of selfplaying games per epoch
+--batch=256: batch number for training 
+```
+For example, if you want to set game=1000 and run 2 epochs, you should run the following command
+```
+python -m src.train --epoch 2 --game 500
+```
+
+You can watch two AI players to play the game if there are existing model file (*.pt) in `/checkpoints`.
+```
+python -m src.replay.run_gui_selfplay
+```
+
+
+
+
+---
 
 ## Game Summary
 4ascend is a turn-based game on a 9×9 board. Players alternate placing stones.  

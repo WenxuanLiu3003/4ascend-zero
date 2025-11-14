@@ -9,3 +9,5 @@ dataclasses-json
 rich
 typer
 pytest
+torch
+tqdm
