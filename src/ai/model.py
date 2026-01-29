@@ -17,7 +17,7 @@ class ResBlock(nn.Module):
         return F.relu(x + h)
 
 class PolicyValueNet(nn.Module):
-    def __init__(self, in_planes: int, board_size: int = 9, width: int = 256, n_blocks: int = 20):
+    def __init__(self, in_planes: int, board_size: int = 9, width: int = 96, n_blocks: int = 20):
         super().__init__()
         self.board_size = board_size
         self.stem = nn.Sequential(

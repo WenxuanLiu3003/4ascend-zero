@@ -23,6 +23,8 @@ from .utils.checkpoint import (
     ensure_dir, latest_checkpoint_path, save_checkpoint, load_checkpoint,
 )
 
+__IF__HPC__ = "SLURM_JOB_ID" in os.environ
+
 class AZLiteTrainer:
     def __init__(self, board_size=9, win_k=4, hp_max=6, device="cpu",
                  save_dir: str = "checkpoints", save_every_sec: int = 300,
@@ -197,8 +199,9 @@ class AZLiteTrainer:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="training parameters")
     parser.add_argument('--epoch', type=int, default=1, help='Number of training epochs')
-    parser.add_argument('--sim', type=int, default=1000, help='Number of simulations')
-    parser.add_argument('--savePath', type=str, default="checkpoints", help='model path')
+    parser.add_argument('--sim', type=int, default=400, help='Number of simulations')
+    default_save_path = "/insomnia001/depts/free/users/wl3003/4ascend-model/checkpoints" if __IF__HPC__ else "checkpoints"
+    parser.add_argument('--savePath', type=str, default=default_save_path, help='model path')
     parser.add_argument('--game', type=int, default=500, help='Number of games per epoch')
     parser.add_argument('--batch', type=int, default=256, help='Number of batch')
     args = parser.parse_args()
