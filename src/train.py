@@ -202,7 +202,7 @@ if __name__ == "__main__":
     parser.add_argument('--sim', type=int, default=400, help='Number of simulations')
     default_save_path = "/insomnia001/depts/free/users/wl3003/4ascend-model/checkpoints" if __IF__HPC__ else "checkpoints"
     parser.add_argument('--savePath', type=str, default=default_save_path, help='model path')
-    parser.add_argument('--game', type=int, default=500, help='Number of games per epoch')
+    parser.add_argument('--game', type=int, default=300, help='Number of games per epoch')
     parser.add_argument('--batch', type=int, default=256, help='Number of batch')
     args = parser.parse_args()
 
@@ -214,3 +214,5 @@ if __name__ == "__main__":
                             shaped_reward_coeff=0.05,     # ← 微奖励系数 λ
                             reuse_tree=False)             # ← 是否根复用（默认关闭）
     trainer.train_loop(epochs=args.epoch, games_per_epoch=args.game, sims=args.sim, batch_size=args.batch)
+
+    # TODO: add the playOnly and trainOnly arg. For playOnly True, only do selfPlay, for each 10 games, store the dataset into the disk (the data files should be stored under the folder os.join(default_save_path, "dataset/") ). Note that you may consider the name of the file to prevent duplicate filename. For the trainOnly True, only to model training (still load the checkpoint model and use the data in the disk). After training, delete all dataset files under the dataset folder.

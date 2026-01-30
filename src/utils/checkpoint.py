@@ -14,6 +14,14 @@ def save_checkpoint(path: str, model: torch.nn.Module, optimizer: torch.optim.Op
                     **extra) -> None:
     """保存模型与优化器状态；extra 可携带 global_step 等信息。"""
     ensure_dir(os.path.dirname(path) or ".")
+    if os.path.exists(path):
+        # Avoid overwrite: rename existing file to a unique backup name.
+        suffix_idx = 1
+        backup_path = f"{path}.bak{suffix_idx}"
+        while os.path.exists(backup_path):
+            suffix_idx += 1
+            backup_path = f"{path}.bak{suffix_idx}"
+        os.rename(path, backup_path)
     payload = {
         "model": model.state_dict(),
         "optimizer": optimizer.state_dict(),
