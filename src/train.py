@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import List
+from typing import List, Tuple
 import os
 import time
 import random
@@ -10,6 +10,7 @@ import torch.optim as optim
 from tqdm import tqdm
 import multiprocessing as mp
 from .core.types import Player
+import sys
 
 from .core.rules import RulesConfig
 from .core.board import Board
@@ -24,6 +25,7 @@ from .utils.checkpoint import (
 )
 
 __IF__HPC__ = "SLURM_JOB_ID" in os.environ
+__IF__DEBUG__ = sys.gettrace() is not None
 
 class AZLiteTrainer:
     def __init__(self, board_size=9, win_k=4, hp_max=6, device="cpu",
@@ -195,16 +197,58 @@ class AZLiteTrainer:
             save_checkpoint(path, self.model, self.opt, global_step=self.global_step)
             print(f"[train] checkpoint saved (interrupt): {path}")
 
+def _dataset_dir(default_save_path: str) -> str:
+    return os.path.join(default_save_path, "dataset")
+
+def _unique_dataset_path(dataset_dir: str) -> str:
+    ensure_dir(dataset_dir)
+    stamp = int(time.time() * 1000)
+    rid = random.randint(0, 1_000_000_000)
+    return os.path.join(dataset_dir, f"dataset_{stamp}_{os.getpid()}_{rid}.pt")
+
+def _save_dataset_file(dataset_dir: str, data: List[Tuple[np.ndarray, np.ndarray, int, float]]) -> str:
+    path = _unique_dataset_path(dataset_dir)
+    torch.save(data, path)
+    return path
+
+def _load_all_datasets(dataset_dir: str) -> List[Tuple[np.ndarray, np.ndarray, int, float]]:
+    if not os.path.isdir(dataset_dir):
+        return []
+    files = sorted(
+        f for f in os.listdir(dataset_dir)
+        if os.path.isfile(os.path.join(dataset_dir, f))
+    )
+    data = []
+    for fname in files:
+        path = os.path.join(dataset_dir, fname)
+        # Dataset files are produced by this codebase; allow full unpickling.
+        data.extend(torch.load(path, map_location="cpu", weights_only=False))
+    return data
+
+def _delete_dataset_files(dataset_dir: str) -> None:
+    if not os.path.isdir(dataset_dir):
+        return
+    for fname in os.listdir(dataset_dir):
+        path = os.path.join(dataset_dir, fname)
+        if os.path.isfile(path):
+            os.remove(path)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="training parameters")
     parser.add_argument('--epoch', type=int, default=1, help='Number of training epochs')
-    parser.add_argument('--sim', type=int, default=400, help='Number of simulations')
+    parser.add_argument('--sim', type=int, default=1200, help='Number of simulations')
     default_save_path = "/insomnia001/depts/free/users/wl3003/4ascend-model/checkpoints" if __IF__HPC__ else "checkpoints"
+    if __IF__DEBUG__:
+        default_save_path = "/insomnia001/depts/free/users/wl3003/4ascend-model/checkpoints"
     parser.add_argument('--savePath', type=str, default=default_save_path, help='model path')
-    parser.add_argument('--game', type=int, default=300, help='Number of games per epoch')
+    parser.add_argument('--game', type=int, default=50, help='Number of games per epoch')
     parser.add_argument('--batch', type=int, default=256, help='Number of batch')
+    parser.add_argument('--playOnly', action='store_true', help='Only run self-play and save datasets')
+    parser.add_argument('--trainOnly', action='store_true', help='Only train using datasets on disk')
     args = parser.parse_args()
+
+    if args.playOnly and args.trainOnly:
+        raise ValueError("playOnly and trainOnly cannot both be True.")
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     trainer = AZLiteTrainer(board_size=9, win_k=4, hp_max=6, device=device,
@@ -213,6 +257,42 @@ if __name__ == "__main__":
                             shaped_reward_enabled=False,   # ← 打开/关闭 奖励塑形
                             shaped_reward_coeff=0.05,     # ← 微奖励系数 λ
                             reuse_tree=False)             # ← 是否根复用（默认关闭）
-    trainer.train_loop(epochs=args.epoch, games_per_epoch=args.game, sims=args.sim, batch_size=args.batch)
+    dataset_dir = _dataset_dir(default_save_path)
+    ensure_dir(dataset_dir)
 
-    # TODO: add the playOnly and trainOnly arg. For playOnly True, only do selfPlay, for each 10 games, store the dataset into the disk (the data files should be stored under the folder os.join(default_save_path, "dataset/") ). Note that you may consider the name of the file to prevent duplicate filename. For the trainOnly True, only to model training (still load the checkpoint model and use the data in the disk). After training, delete all dataset files under the dataset folder.
+    if args.playOnly:
+        for ep in range(args.epoch):
+            print(f"[playOnly] Epoch {ep+1}/{args.epoch}: self-play generating...")
+            remaining = args.game
+            while remaining > 0:
+                chunk = min(10, remaining)
+                data = trainer.self_play_batch(games=chunk, sims=args.sim)
+                path = _save_dataset_file(dataset_dir, data)
+                print(f"[playOnly] saved dataset: {path} (games={chunk}, samples={len(data)})")
+                remaining -= chunk
+    elif args.trainOnly:
+        data = _load_all_datasets(dataset_dir)
+        print(f"[trainOnly] loaded samples: {len(data)}")
+        for ep in range(args.epoch):
+            random.shuffle(data)
+            print(f"[trainOnly] Epoch {ep+1}/{args.epoch}: training...")
+            for i in tqdm(range(0, len(data), args.batch), desc="Train", unit="batch"):
+                batch = data[i:i+args.batch]
+                loss, lp, lv = trainer.train_step(batch)
+                tqdm.write(f"[train] step={trainer.global_step} loss={loss:.4f} (p={lp:.4f}, v={lv:.4f})")
+        saved_ok = False
+        try:
+            ensure_dir(args.savePath)
+            stamp = int(time.time() * 1000)
+            path = os.path.join(args.savePath, f"ckpt_trainonly_step{trainer.global_step}_{stamp}.pt")
+            save_checkpoint(path, trainer.model, trainer.opt, global_step=trainer.global_step)
+            print(f"[trainOnly] checkpoint saved: {path}")
+            saved_ok = True
+        except Exception as exc:
+            print(f"[trainOnly] checkpoint save failed; dataset kept. error={exc}")
+
+        # if saved_ok:
+        #     _delete_dataset_files(dataset_dir)
+        #     print(f"[trainOnly] deleted dataset files under: {dataset_dir}")
+    else:
+        trainer.train_loop(epochs=args.epoch, games_per_epoch=args.game, sims=args.sim, batch_size=args.batch)
