@@ -222,7 +222,10 @@ def _load_all_datasets(dataset_dir: str) -> List[Tuple[np.ndarray, np.ndarray, i
     for fname in files:
         path = os.path.join(dataset_dir, fname)
         # Dataset files are produced by this codebase; allow full unpickling.
-        data.extend(torch.load(path, map_location="cpu", weights_only=False))
+        try:
+            data.extend(torch.load(path, map_location=device, weights_only=False))
+        except (EOFError, RuntimeError, ValueError) as exc:
+            print(f"[trainOnly] skipped corrupted dataset file: {path}. error={exc}")
     return data
 
 def _delete_dataset_files(dataset_dir: str) -> None:
@@ -241,7 +244,7 @@ if __name__ == "__main__":
     if __IF__DEBUG__:
         default_save_path = "/insomnia001/depts/free/users/wl3003/4ascend-model/checkpoints"
     parser.add_argument('--savePath', type=str, default=default_save_path, help='model path')
-    parser.add_argument('--game', type=int, default=50, help='Number of games per epoch')
+    parser.add_argument('--game', type=int, default=70, help='Number of games per epoch')
     parser.add_argument('--batch', type=int, default=256, help='Number of batch')
     parser.add_argument('--playOnly', action='store_true', help='Only run self-play and save datasets')
     parser.add_argument('--trainOnly', action='store_true', help='Only train using datasets on disk')
@@ -251,6 +254,7 @@ if __name__ == "__main__":
         raise ValueError("playOnly and trainOnly cannot both be True.")
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    print("using %s as device." % device)
     trainer = AZLiteTrainer(board_size=9, win_k=4, hp_max=6, device=device,
                             save_dir=args.savePath, save_every_sec=300,
                             num_workers=0,

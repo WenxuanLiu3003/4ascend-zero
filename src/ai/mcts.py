@@ -36,6 +36,10 @@ class Node:
             self.children = {}
 
 
+def _other(p: Player) -> Player:
+    return Player.WHITE if p is Player.BLACK else Player.BLACK
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # MCTS 主体
 # ──────────────────────────────────────────────────────────────────────────────
@@ -173,7 +177,6 @@ class MCTS:
             self._expand(n, s, p)
         else:
             # 简单的终局价值：从当前结点视角，胜=+1/负=-1/和=0
-            # 若你的 GameState 提供 winner 判定，可直接替换以下逻辑。
             loser_idx = -1
             if (s.hp <= 0).any():
                 # hp<=0 的一方为败者
@@ -203,7 +206,7 @@ class MCTS:
         mask = self._legal_mask(state)
         legal_actions = np.where(mask > 0.0)[0]
         for a in legal_actions:
-            node.children[a] = Node(prior=float(prior_probs[a]), to_play=state.to_play)
+            node.children[a] = Node(prior=float(prior_probs[a]), to_play=_other(state.to_play))
 
     # ----------------------------------------------------------------------
     # 选择子节点：PUCT = Q + c_puct * P * sqrt(sumN) / (1+N)

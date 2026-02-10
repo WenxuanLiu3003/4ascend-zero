@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import argparse
 import os
+import time
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
+from tqdm import tqdm
 
 from .ai.model import PolicyValueNet
 from .ai.mcts import MCTS
@@ -20,12 +22,14 @@ from .utils.checkpoint import load_checkpoint
 __IF__HPC__ = "SLURM_JOB_ID" in os.environ
 
 
-def _list_model_files(save_path: str) -> List[str]:
+def _list_model_files_by_mtime(save_path: str) -> List[str]:
     files = []
     for name in os.listdir(save_path):
         if name.endswith(".pt"):
-            files.append(os.path.join(save_path, name))
-    files.sort()
+            path = os.path.join(save_path, name)
+            if os.path.isfile(path):
+                files.append(path)
+    files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
     return files
 
 
@@ -120,31 +124,34 @@ def evaluate_models(
         models[path] = model
 
     scores = {path: 0.0 for path in model_paths}
-    for i in range(len(model_paths)):
-        for j in range(i + 1, len(model_paths)):
-            path_a = model_paths[i]
-            path_b = model_paths[j]
-            model_a = models[path_a]
-            model_b = models[path_b]
-            for g in range(num_game):
-                if g % 2 == 0:
-                    winner = play_one_game(model_a, model_b, cfg, sims, device)
-                    if winner is Player.BLACK:
-                        scores[path_a] += 1.0
-                    elif winner is Player.WHITE:
-                        scores[path_b] += 1.0
-                    else:
-                        scores[path_a] += 0.5
-                        scores[path_b] += 0.5
-                else:
-                    winner = play_one_game(model_b, model_a, cfg, sims, device)
-                    if winner is Player.BLACK:
-                        scores[path_b] += 1.0
-                    elif winner is Player.WHITE:
-                        scores[path_a] += 1.0
-                    else:
-                        scores[path_a] += 0.5
-                        scores[path_b] += 0.5
+    if len(model_paths) != 2:
+        raise ValueError("evaluate_models expects exactly two model paths.")
+
+    path_a, path_b = model_paths
+    model_a = models[path_a]
+    model_b = models[path_b]
+    for g in tqdm(range(num_game), desc="Eval games", unit="game"):
+        start_t = time.perf_counter()
+        if g % 2 == 0:
+            winner = play_one_game(model_a, model_b, cfg, sims, device)
+            if winner is Player.BLACK:
+                scores[path_a] += 1.0
+            elif winner is Player.WHITE:
+                scores[path_b] += 1.0
+            else:
+                scores[path_a] += 0.5
+                scores[path_b] += 0.5
+        else:
+            winner = play_one_game(model_b, model_a, cfg, sims, device)
+            if winner is Player.BLACK:
+                scores[path_b] += 1.0
+            elif winner is Player.WHITE:
+                scores[path_a] += 1.0
+            else:
+                scores[path_a] += 0.5
+                scores[path_b] += 0.5
+        elapsed = time.perf_counter() - start_t
+        tqdm.write(f"[test] game {g+1}/{num_game} finished in {elapsed:.2f}s")
 
     best_path = max(scores.items(), key=lambda kv: kv[1])[0]
     return scores, best_path
@@ -152,10 +159,10 @@ def evaluate_models(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate checkpoints via 1v1 matches.")
-    default_path = "/insomnia001/depts/free/users/wl3003/4ascend-model/checkpoints" if __IF__HPC__ else "checkpoints"
+    default_path = "/insomnia001/depts/free/users/wl3003/4ascend-model/checkpoints"
     parser.add_argument("--savePath", type=str, default=default_path, help="path to checkpoints")
-    parser.add_argument("--num_game", type=int, default=10, help="games per pair (1v1)")
-    parser.add_argument("--sim", type=int, default=400, help="MCTS simulations per move")
+    parser.add_argument("--num_game", type=int, default=9, help="games per pair (1v1)")
+    parser.add_argument("--sim", type=int, default=1200, help="MCTS simulations per move")
     parser.add_argument("--board_size", type=int, default=9)
     parser.add_argument("--win_k", type=int, default=4)
     parser.add_argument("--hp_max", type=int, default=6)
@@ -166,13 +173,16 @@ def main() -> None:
 
     if not os.path.isdir(args.savePath):
         raise FileNotFoundError(f"savePath not found: {args.savePath}")
-    model_paths = _list_model_files(args.savePath)
+    model_paths = _list_model_files_by_mtime(args.savePath)
     if len(model_paths) == 0:
         raise RuntimeError("No model files found to evaluate.")
     if len(model_paths) == 1:
         print(os.path.basename(model_paths[0]))
         return
+    # Compare only the most recent and second most recent checkpoints.
+    model_paths = model_paths[:2]
 
+    print(f"[test] comparing: {os.path.basename(model_paths[0])} vs {os.path.basename(model_paths[1])}")
     scores, best_path = evaluate_models(
         model_paths=model_paths,
         cfg=cfg,
