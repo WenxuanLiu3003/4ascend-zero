@@ -42,7 +42,7 @@ class AZLiteTrainer:
         self.model = PolicyValueNet(in_planes=self.encoder.num_planes, board_size=board_size).to(device)
         print("trainable parameters: %d" % sum(p.numel() for p in self.model.parameters() if p.requires_grad) )
         self.model.eval()
-        self.opt = optim.Adam(self.model.parameters(), lr=0.02, weight_decay=1e-4)
+        self.opt = optim.Adam(self.model.parameters(), lr=1e-3, weight_decay=1e-4)
         self.ce = nn.KLDivLoss(reduction='batchmean')
         self.mse = nn.MSELoss()
 
@@ -66,6 +66,12 @@ class AZLiteTrainer:
             self.global_step = int(payload.get("global_step", self.global_step))
         else:
             print("[train] No checkpoint found. Starting fresh.")
+            try:
+                path = os.path.join(self.save_dir, "ckpt_step0_init.pt")
+                save_checkpoint(path, self.model, self.opt, global_step=0)
+                print(f"[train] Initial checkpoint saved: {path}")
+            except Exception as exc:
+                print(f"[train] Initial checkpoint save failed: {exc}")
 
     # —— 单进程自博弈 —— #
     def _self_play_batch_serial(self, games=8, sims=400) -> List[Tuple[np.ndarray, np.ndarray, int, float]]:
