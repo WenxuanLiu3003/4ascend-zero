@@ -262,6 +262,8 @@ class Engine:
                 flower_num = 3
             else:
                 return
+        else:
+            flower_num = 3 if s.turn >= 65 else 2
         # if s.turn < 50 or s.turn % 20 != 0:
         #     return
         # else:

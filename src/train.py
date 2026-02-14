@@ -250,7 +250,7 @@ if __name__ == "__main__":
     if __IF__DEBUG__:
         default_save_path = "/insomnia001/depts/free/users/wl3003/4ascend-model/checkpoints"
     parser.add_argument('--savePath', type=str, default=default_save_path, help='model path')
-    parser.add_argument('--game', type=int, default=70, help='Number of games per epoch')
+    parser.add_argument('--game', type=int, default=100, help='Number of games per epoch')
     parser.add_argument('--batch', type=int, default=256, help='Number of batch')
     parser.add_argument('--playOnly', action='store_true', help='Only run self-play and save datasets')
     parser.add_argument('--trainOnly', action='store_true', help='Only train using datasets on disk')
@@ -260,7 +260,7 @@ if __name__ == "__main__":
         raise ValueError("playOnly and trainOnly cannot both be True.")
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print("using %s as device." % device)
+    print("using %s as device." % torch.cuda.get_device_name(torch.cuda.current_device()))
     trainer = AZLiteTrainer(board_size=9, win_k=4, hp_max=6, device=device,
                             save_dir=args.savePath, save_every_sec=300,
                             num_workers=0,
