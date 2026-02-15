@@ -40,10 +40,6 @@ def zsin(x: float, period: float) -> float:
 class Engine:
     def __init__(self, win_k: int = 4):
         self.win_k = win_k
-        self.over_fill = False
-        self.just_unascend = False
-        self.grow_count = 11
-        self.unascend_charge = 25
 
     def step(self, s: GameState, move: Move) -> GameState:
         """
@@ -81,10 +77,11 @@ class Engine:
             else:
                 # 未触发攻防：正常轮转并按周期刷新
                 ns.to_play = _other(ns.to_play)
+                ns.just_unascend = False
 
-            if self.unascend_charge > 0:
-                self.unascend_charge -= 1
-            self.just_unascend = False
+            if ns.unascend_charge > 0:
+                ns.unascend_charge -= 1
+
             
 
         elif ns.phase is Phase.ATTACK_DEFENSE:
@@ -105,6 +102,9 @@ class Engine:
 
             # 由 attack_chain_mask 还原攻方链坐标集合（避免维护额外上下文）
             atk_cells = self._cells_from_mask(ns.attack_chain_mask)
+            # 如果防守方没有选择ascend, 也有可能占据进攻方棋子，这时需要从atk_cells里面扣除
+            if not def_cells:
+                atk_cells.discard(move.to_tuple())
 
             # 进行 a,b,c,d 伤害结算并更新 HP
             self._resolve_attack_defense(ns, defender, move, atk_cells, def_cells)
@@ -123,35 +123,35 @@ class Engine:
 
             # 回到 NORMAL；清 mask；轮到进攻方对手（即当前 defender 的对手）
             ns.phase = Phase.NORMAL
-            self.just_unascend = True
-            self.unascend_charge = int(max(12.5, min(self.unascend_charge + (25 - self.unascend_charge) * 0.4, 25)))
+            ns.unascend_charge = int(max(12.5, min(ns.unascend_charge + (25 - ns.unascend_charge) * 0.4, 25)))
 
             ns.attack_chain_mask = None
             ns.to_play = _other(defender)
             
-
+        else:
+            raise RuntimeError(f"未知阶段: {ns.phase}")
+        
         # 计入一手
         ns.turn += 1
 
         # 刷新植物
-        self.grow_count -= 1
-        if not ns.phase == Phase.ATTACK_DEFENSE:  # 攻防开始时不刷草
-            if self.grow_count <= 0 or (s.phase == Phase.ATTACK_DEFENSE and not self.just_unascend):
-                self.grow_count = max(7, int(11 - s.turn / 22 * 2))
+        ns.grow_count -= 1
+        if not ns.phase == Phase.ATTACK_DEFENSE:  # 刚进行ascend不刷草
+            if ns.grow_count <= 0 or (s.phase == Phase.ATTACK_DEFENSE and not ns.just_unascend):
+                ns.grow_count = max(7, int(11 - int(ns.turn / 22) * 2))
                 stone_count = np.sum(ns.board.grid > 0)
                 if stone_count >= 44:
-                    self.over_fill = True
-                if self.over_fill and stone_count < 22:
-                    self.over_fill = False
+                    ns.over_fill = True
+                if ns.over_fill and stone_count < 22:
+                    ns.over_fill = False
                 flower_num = 3 if s.turn >= 65 else 2
                 self._refresh_plants(ns, flower_num, just_ascend=(s.phase == Phase.ATTACK_DEFENSE))
-                if self.over_fill:
-                    self.grow_count /= 2
-                if self.grow_count % 2 == 0:
-                    self.grow_count -= 1
-            
-        else:
-            raise RuntimeError(f"未知阶段: {ns.phase}")
+                if ns.over_fill:
+                    ns.grow_count = int(ns.grow_count / 2)
+                if ns.grow_count % 2 == 0:
+                    ns.grow_count -= 1
+                
+                ns.just_unascend = True
 
         return ns
 
@@ -334,7 +334,7 @@ class Engine:
                 r -= dr
                 c -= dc
             axis_counts.append(count)
-        return max(axis_counts), sum(axis_counts)
+        return max(axis_counts), sum(axis_counts) - 3
 
     def _refresh_plants(self, s: GameState, flower_num: int, just_ascend: bool) -> None:
         """
@@ -346,6 +346,8 @@ class Engine:
         """
         board = s.board
         size = board.size
+        if s.over_fill:
+            flower_num += 1
 
         candidates = [(r, c)
                       for r in range(size) for c in range(size)
@@ -367,7 +369,7 @@ class Engine:
             # 刷草位置逻辑
             weight = 500 + random.randint(0, 20)
             if max(black_max_align, white_max_align) >= 4:
-                if self.over_fill:
+                if s.over_fill:
                     weight += 450
                     if board.plants[r, c] > 0:
                         weight += 100
@@ -381,11 +383,11 @@ class Engine:
                     weight += (max_align_total[attacker_idx] - max_align_total[defender_idx]) * 3
                 if max_align[attacker_idx] > max_align[defender_idx]:
                     weight += (max_align[attacker_idx] - max_align[defender_idx]) * 15
-                if self.unascend_charge <= 0:
-                    weight += int(zsin(25 - self.unascend_charge, 25.0) * 120.0)
+                if s.unascend_charge <= 0:
+                    weight += int(zsin(25 - s.unascend_charge, 25.0) * 120.0)
             else:
                 pass  # TODO: 这里有一段weight更新逻辑没有实现，对应源代码TTRPlant.cs的第229-236行
-            if board.plants[r, c] > 0 and not (just_ascend and self.unascend_charge <= 0):
+            if board.plants[r, c] > 0 and not (just_ascend and s.unascend_charge <= 0):
                 weight -= 30
             elif True:
                 pass  # TODO: 这里有一段更新逻辑没有实现，对应源代码TTRPlant.cs第239-240行

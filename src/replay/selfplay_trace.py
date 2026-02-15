@@ -24,6 +24,10 @@ class TraceStep:
     plants: np.ndarray                 # 植物计数 (H,W)，uint16
     hp: Tuple[int,int]                 # (黑HP, 白HP)
     phase: str                         # 'NORMAL' / 'ATTACK_DEFENSE'
+    over_fill: bool                    # 是否进入过填充模式
+    just_unascend: bool                # 本次刷新是否刚由未ascend触发
+    grow_count: int                    # 距离下次刷新剩余回合
+    unascend_charge: int               # 未ascend充能值
     attack_chain_mask: Optional[np.ndarray]  # 攻方连子掩码
     plant_events: Dict[str, Any]       # {'spawn':[(r,c,delta),...], 'clear':[(r,c,delta-)]}
 
@@ -75,6 +79,10 @@ def generate_selfplay_trace(cfg: RulesConfig, model: PolicyValueNet, device: str
             plants=state.board.plants.copy(),
             hp=(int(state.hp[0]), int(state.hp[1])),
             phase=state.phase.name,
+            over_fill=bool(state.over_fill),
+            just_unascend=bool(state.just_unascend),
+            grow_count=int(state.grow_count),
+            unascend_charge=int(state.unascend_charge),
             attack_chain_mask=(state.attack_chain_mask.copy() if state.attack_chain_mask is not None else None),
             plant_events=_detect_plant_events(prev_plants, state.board.plants),
         )

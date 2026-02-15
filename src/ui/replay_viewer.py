@@ -17,7 +17,7 @@ ORANGE = (245, 150, 60)
 
 CELL = 48
 MARGIN = 32
-INFO_H = 120
+INFO_H = 150
 STONE_R = 18
 PLANT_R = 6
 
@@ -44,10 +44,21 @@ def launch_replay(trace: List, board_size: int = 9):
         screen.fill(BG)
         step = trace[idx]
         size = board_size
+        over_fill = getattr(step, "over_fill", False)
+        just_unascend = getattr(step, "just_unascend", False)
+        grow_count = getattr(step, "grow_count", 0)
+        unascend_charge = getattr(step, "unascend_charge", 0)
         # 顶栏信息：步号/HP/阶段
         _draw_text(screen, f"Frame {idx+1}/{len(trace)}  |  Turn {step.turn}  |  Phase: {step.phase}", (MARGIN, MARGIN-8), 28)
         _draw_text(screen, f"BLACK HP: {step.hp[0]}   WHITE HP: {step.hp[1]}", (MARGIN, MARGIN+20), 22)
-        _draw_text(screen, "←/→: 上一手/下一手   Home/End: 首/尾   R: 重开   Esc: 退出", (MARGIN, MARGIN+46), 20)
+        _draw_text(
+            screen,
+            f"over_fill={over_fill}  just_unascend={just_unascend}  "
+            f"grow_count={grow_count}  unascend_charge={unascend_charge}",
+            (MARGIN, MARGIN + 46),
+            20,
+        )
+        _draw_text(screen, "←/→: 上一手/下一手   Home/End: 首/尾   R: 重开   Esc: 退出", (MARGIN, MARGIN + 68), 20)
 
         # 棋盘与网格
         board_x0 = MARGIN
@@ -101,7 +112,7 @@ def launch_replay(trace: List, board_size: int = 9):
             pygame.draw.circle(screen, BLUE, (cx, cy), STONE_R + 6, 2)
 
         # 植物事件（文本提示）
-        y0 = INFO_H - 16
+        y0 = INFO_H - 22
         spawns = step.plant_events.get("spawn", [])
         clears = step.plant_events.get("clear", [])
         if spawns:

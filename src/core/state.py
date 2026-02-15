@@ -29,6 +29,12 @@ class GameState:
     # 记录最近一次落点（冗余但方便）
     last_move: Optional[Move] = None
 
+    # 植物刷新相关状态
+    over_fill: bool = False
+    just_unascend: bool = False
+    grow_count: int = 11
+    unascend_charge: int = 25
+
     def copy(self) -> "GameState":
         return GameState(
             cfg=self.cfg,
@@ -41,6 +47,10 @@ class GameState:
             hp=self.hp.copy(),
             attack_chain_mask=None if self.attack_chain_mask is None else self.attack_chain_mask.copy(),
             last_move=self.last_move,
+            over_fill=self.over_fill,
+            just_unascend=self.just_unascend,
+            grow_count=self.grow_count,
+            unascend_charge=self.unascend_charge,
         )
     
     # 基础查询与终局

@@ -25,7 +25,7 @@ ORANGE = (245, 150, 60)
 
 CELL = 48            # 每格像素
 MARGIN = 32          # 棋盘外边距
-INFO_H = 100         # 顶部信息栏高度（HP、阶段等）
+INFO_H = 130         # 顶部信息栏高度（HP、阶段等）
 STONE_R = 18         # 棋子半径
 PLANT_R = 6          # 植物小圆半径（最多画两个）
 
@@ -76,7 +76,16 @@ def draw_board(screen, state: GameState):
     # 阶段/当前行动方
     phase_txt = "ATTACK_DEFENSE" if state.phase == Phase.ATTACK_DEFENSE else "NORMAL"
     turn_txt = "BLACK" if state.to_play == Player.BLACK else "WHITE"
-    screen.blit(bigfont.render(f"Phase: {phase_txt}  |  To Play: {turn_txt}  |  Turn: {state.turn}", True, BLACK), (MARGIN, INFO_H - 40))
+    screen.blit(bigfont.render(f"Phase: {phase_txt}  |  To Play: {turn_txt}  |  Turn: {state.turn}", True, BLACK), (MARGIN, INFO_H - 70))
+    screen.blit(
+        font.render(
+            f"over_fill={state.over_fill}  just_unascend={state.just_unascend}  "
+            f"grow_count={state.grow_count}  unascend_charge={state.unascend_charge}",
+            True,
+            BLACK,
+        ),
+        (MARGIN, INFO_H - 40),
+    )
     screen.blit(font.render("[R] 重开  [Esc] 退出", True, BLACK), (MARGIN, INFO_H - 16))
 
     # 棋盘矩形
@@ -177,4 +186,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
