@@ -28,116 +28,231 @@ MARGIN = 32          # 棋盘外边距
 INFO_H = 130         # 顶部信息栏高度（HP、阶段等）
 STONE_R = 18         # 棋子半径
 PLANT_R = 6          # 植物小圆半径（最多画两个）
+GRID_EXT = 10        # 网格线向外延伸像素
+CLICK_TOL = 16       # 点击吸附到交叉点的容差（像素）
 
 
-def rc_from_pos(pos, size):
+def _makes_four(grid: np.ndarray, r: int, c: int, stone: int, need: int = 4) -> bool:
+    """检查在 (r, c) 放置 stone 后，是否形成 need 连（含 need 及以上）。"""
+    dirs = ((1, 0), (0, 1), (1, 1), (1, -1))
+    n = grid.shape[0]
+    for dr, dc in dirs:
+        cnt = 1
+        rr, cc = r + dr, c + dc
+        while 0 <= rr < n and 0 <= cc < n and grid[rr, cc] == stone:
+            cnt += 1
+            rr += dr
+            cc += dc
+        rr, cc = r - dr, c - dc
+        while 0 <= rr < n and 0 <= cc < n and grid[rr, cc] == stone:
+            cnt += 1
+            rr -= dr
+            cc -= dc
+        if cnt >= need:
+            return True
+    return False
+
+
+def _compute_layout(win_w: int, win_h: int, size: int):
+    margin = max(12, int(min(win_w, win_h) * 0.04))
+    cell = max(18, int((win_w - 3 * margin) / max(1, size + 2)))
+    side_w = max(92, int(cell * 2.3))
+    for _ in range(2):
+        side_w = max(92, int(cell * 2.3))
+        max_cell_w = (win_w - 3 * margin - side_w) / max(1, size)
+        info_h = max(96, int(cell * 2.8))
+        info_h = min(info_h, int(win_h * 0.42))
+        max_cell_h = (win_h - info_h - 2 * margin) / max(1, size)
+        cell = max(18, int(min(max_cell_w, max_cell_h)))
+
+    side_w = max(92, int(cell * 2.3))
+    info_h = max(96, int(cell * 2.8))
+    info_h = min(info_h, int(win_h * 0.42))
+    board_area = size * cell
+    content_w = side_w + margin + board_area
+    content_x = max(margin, (win_w - content_w) // 2)
+    board_outer_x = content_x + side_w + margin
+    board_outer_y = info_h + max(0, (win_h - info_h - board_area) // 2)
+    board_pad = cell // 2
+    return {
+        "cell": cell,
+        "margin": margin,
+        "info_h": info_h,
+        "board_pad": board_pad,
+        "board_x0": board_outer_x + board_pad,
+        "board_y0": board_outer_y + board_pad,
+        "board_span": (size - 1) * cell,
+        "grid_ext": max(4, cell // 5),
+        "stone_r": max(8, int(cell * 0.38)),
+        "plant_r": max(3, int(cell * 0.14)),
+        "click_tol": max(8, int(cell * 0.34)),
+        "font_big": max(18, int(cell * 0.56)),
+        "font_mid": max(14, int(cell * 0.42)),
+        "font_small": max(12, int(cell * 0.34)),
+        "line_gap": max(4, int(cell * 0.10)),
+        "hp_h": max(10, int(cell * 0.22)),
+        "side_x": content_x,
+        "side_w": side_w,
+        "board_outer_y": board_outer_y,
+    }
+
+
+def _draw_button(screen, rect, text, font, active=False):
+    fill = (210, 225, 245) if active else (235, 235, 235)
+    pygame.draw.rect(screen, fill, rect, border_radius=6)
+    pygame.draw.rect(screen, (120, 120, 120), rect, width=1, border_radius=6)
+    label = font.render(text, True, BLACK)
+    tx = rect.x + (rect.w - label.get_width()) // 2
+    ty = rect.y + (rect.h - label.get_height()) // 2
+    screen.blit(label, (tx, ty))
+
+
+def _build_buttons(layout, edit_mode):
+    x0 = layout["side_x"]
+    btn_h = max(24, int(layout["cell"] * 0.58))
+    btn_w = max(70, layout["side_w"])
+    gap = max(8, int(layout["cell"] * 0.25))
+    y0 = max(layout["info_h"] + gap, layout["board_outer_y"])
+    black_rect = pygame.Rect(x0, y0, btn_w, btn_h)
+    white_rect = pygame.Rect(x0, y0 + btn_h + gap, btn_w, btn_h)
+    plant_rect = pygame.Rect(x0, y0 + (btn_h + gap) * 2, btn_w, btn_h)
+    back_rect = pygame.Rect(x0, y0 + (btn_h + gap) * 3, btn_w, btn_h)
+    return {
+        "black": black_rect,
+        "white": white_rect,
+        "plant": plant_rect,
+        "back": back_rect,
+        "active_black": edit_mode == "black",
+        "active_white": edit_mode == "white",
+        "active_plant": edit_mode == "plant",
+    }
+
+
+def rc_from_pos(pos, size, layout):
     x, y = pos
-    # 计算棋盘左上角
-    board_x0 = MARGIN
-    board_y0 = INFO_H + MARGIN
-    col = int((x - board_x0) // CELL)
-    row = int((y - board_y0) // CELL)
+    board_x0 = layout["board_x0"]
+    board_y0 = layout["board_y0"]
+    cell = layout["cell"]
+    col = int(round((x - board_x0) / cell))
+    row = int(round((y - board_y0) / cell))
     if 0 <= row < size and 0 <= col < size:
-        # 棋格中心位置
-        cx = board_x0 + col * CELL + CELL // 2
-        cy = board_y0 + row * CELL + CELL // 2
-        # 鼠标需在格内一定范围才算点击
-        if abs(x - cx) <= CELL // 2 and abs(y - cy) <= CELL // 2:
+        # 交叉点吸附
+        cx = board_x0 + col * cell
+        cy = board_y0 + row * cell
+        if abs(x - cx) <= layout["click_tol"] and abs(y - cy) <= layout["click_tol"]:
             return row, col
     return None
 
 
-def draw_board(screen, state: GameState):
+def draw_board(screen, state: GameState, edit_mode: str | None):
     screen.fill(BG)
     size = state.board.size
+    win_w, win_h = screen.get_size()
+    ly = _compute_layout(win_w, win_h, size)
 
-    # 顶部信息栏
-    font = pygame.font.SysFont(None, 28)
-    bigfont = pygame.font.SysFont(None, 34)
+    font = pygame.font.SysFont(None, ly["font_mid"])
+    bigfont = pygame.font.SysFont(None, ly["font_big"])
+    smallfont = pygame.font.SysFont(None, ly["font_small"])
 
-    # HP 条
-    hp_w = 280
-    hp_h = 16
-    pad = 10
+    hp_h = ly["hp_h"]
+    text_h = font.get_height()
+    small_h = smallfont.get_height()
+    x0 = ly["margin"]
+    y = ly["margin"]
 
-    # 黑方（idx=0）
-    pygame.draw.rect(screen, (220,220,220), (MARGIN, MARGIN, hp_w, hp_h))
-    ratio_b = max(0.0, min(1.0, state.hp[0] / state.cfg.hp_max))
-    pygame.draw.rect(screen, BLACK, (MARGIN, MARGIN, int(hp_w * ratio_b), hp_h))
-    screen.blit(font.render(f"BLACK HP: {state.hp[0]}/{state.cfg.hp_max}", True, BLACK), (MARGIN, MARGIN + hp_h + 4))
-
-    # 白方（idx=1）
-    x2 = MARGIN + hp_w + 120
-    pygame.draw.rect(screen, (220,220,220), (x2, MARGIN, hp_w, hp_h))
-    ratio_w = max(0.0, min(1.0, state.hp[1] / state.cfg.hp_max))
-    pygame.draw.rect(screen, (180,180,180), (x2, MARGIN, int(hp_w * ratio_w), hp_h))
-    screen.blit(font.render(f"WHITE HP: {state.hp[1]}/{state.cfg.hp_max}", True, BLACK), (x2, MARGIN + hp_h + 4))
-
-    # 阶段/当前行动方
     phase_txt = "ATTACK_DEFENSE" if state.phase == Phase.ATTACK_DEFENSE else "NORMAL"
     turn_txt = "BLACK" if state.to_play == Player.BLACK else "WHITE"
-    screen.blit(bigfont.render(f"Phase: {phase_txt}  |  To Play: {turn_txt}  |  Turn: {state.turn}", True, BLACK), (MARGIN, INFO_H - 70))
+    mode_txt = f"EDIT: {edit_mode.upper()}" if edit_mode else "EDIT: OFF"
     screen.blit(
-        font.render(
+        bigfont.render(f"Phase: {phase_txt} | To Play: {turn_txt} | Turn: {state.turn} | {mode_txt}", True, BLACK),
+        (x0, y),
+    )
+    y += bigfont.get_height() + ly["line_gap"]
+
+    hp_w = max(160, min(win_w - 2 * x0, int(win_w * 0.40)))
+    pygame.draw.rect(screen, (220, 220, 220), (x0, y, hp_w, hp_h))
+    ratio_b = max(0.0, min(1.0, state.hp[0] / state.cfg.hp_max))
+    pygame.draw.rect(screen, BLACK, (x0, y, int(hp_w * ratio_b), hp_h))
+    screen.blit(font.render(f"BLACK HP: {state.hp[0]}/{state.cfg.hp_max}", True, BLACK), (x0, y + hp_h + 2))
+    y += hp_h + text_h + ly["line_gap"]
+
+    pygame.draw.rect(screen, (220, 220, 220), (x0, y, hp_w, hp_h))
+    ratio_w = max(0.0, min(1.0, state.hp[1] / state.cfg.hp_max))
+    pygame.draw.rect(screen, (180, 180, 180), (x0, y, int(hp_w * ratio_w), hp_h))
+    screen.blit(font.render(f"WHITE HP: {state.hp[1]}/{state.cfg.hp_max}", True, BLACK), (x0, y + hp_h + 2))
+    y += hp_h + text_h + ly["line_gap"]
+
+    screen.blit(
+        smallfont.render(
             f"over_fill={state.over_fill}  just_unascend={state.just_unascend}  "
             f"grow_count={state.grow_count}  unascend_charge={state.unascend_charge}",
             True,
             BLACK,
         ),
-        (MARGIN, INFO_H - 40),
+        (x0, y),
     )
-    screen.blit(font.render("[R] 重开  [Esc] 退出", True, BLACK), (MARGIN, INFO_H - 16))
+    y += small_h + ly["line_gap"]
+    screen.blit(smallfont.render("[R] 重开  [Esc] 退出", True, BLACK), (x0, y))
 
-    # 棋盘矩形
-    board_x0 = MARGIN
-    board_y0 = INFO_H + MARGIN
-    L = size * CELL
-    pygame.draw.rect(screen, (230,230,230), (board_x0, board_y0, L, L))
+    buttons = _build_buttons(ly, edit_mode)
+    _draw_button(screen, buttons["black"], "Black", smallfont, buttons["active_black"])
+    _draw_button(screen, buttons["white"], "White", smallfont, buttons["active_white"])
+    _draw_button(screen, buttons["plant"], "Plant", smallfont, buttons["active_plant"])
+    _draw_button(screen, buttons["back"], "Back", smallfont, active=False)
 
-    # 网格
-    for i in range(size + 1):
-        x = board_x0 + i * CELL
-        y = board_y0 + i * CELL
-        pygame.draw.line(screen, GRID, (board_x0, board_y0 + i*CELL), (board_x0 + L, board_y0 + i*CELL), 1)
-        pygame.draw.line(screen, GRID, (board_x0 + i*CELL, board_y0), (board_x0 + i*CELL, board_y0 + L), 1)
+    board_x0 = ly["board_x0"]
+    board_y0 = ly["board_y0"]
+    span = ly["board_span"]
+    board_pad = ly["board_pad"]
+    cell = ly["cell"]
+    stone_r = ly["stone_r"]
+    plant_r = ly["plant_r"]
+    grid_ext = ly["grid_ext"]
+    pygame.draw.rect(
+        screen,
+        (230, 230, 230),
+        (board_x0 - board_pad, board_y0 - board_pad, span + board_pad * 2, span + board_pad * 2),
+    )
 
-    # 画被无效化连子掩码（攻防阶段提示）
+    for i in range(size):
+        x = board_x0 + i * cell
+        y = board_y0 + i * cell
+        pygame.draw.line(screen, GRID, (board_x0 - grid_ext, y), (board_x0 + span + grid_ext, y), 1)
+        pygame.draw.line(screen, GRID, (x, board_y0 - grid_ext), (x, board_y0 + span + grid_ext), 1)
+
     if state.attack_chain_mask is not None:
         mask = state.attack_chain_mask
         for r, c in zip(*np.where(mask)):
-            cx = board_x0 + c*CELL + CELL//2
-            cy = board_y0 + r*CELL + CELL//2
-            pygame.draw.circle(screen, ORANGE, (cx, cy), STONE_R + 4, 2)
+            cx = board_x0 + c * cell
+            cy = board_y0 + r * cell
+            pygame.draw.circle(screen, ORANGE, (cx, cy), stone_r + 4, 2)
 
-    # 画棋子
     for r in range(size):
         for c in range(size):
             v = state.board.grid[r, c]
             if v == 0:
                 continue
-            cx = board_x0 + c*CELL + CELL//2
-            cy = board_y0 + r*CELL + CELL//2
+            cx = board_x0 + c * cell
+            cy = board_y0 + r * cell
             color = BLACK if v == 1 else WHITE
-            pygame.draw.circle(screen, color, (cx, cy), STONE_R)
-            pygame.draw.circle(screen, STONE_OUTLINE, (cx, cy), STONE_R, 2)
+            pygame.draw.circle(screen, color, (cx, cy), stone_r)
+            pygame.draw.circle(screen, STONE_OUTLINE, (cx, cy), stone_r, 2)
 
-    # 画植物（以 0/1/2 株的小圆表示，>2 会被引擎限制）
-    plant_font = pygame.font.SysFont(None, 20)
     for r in range(size):
         for c in range(size):
             k = int(state.board.plants[r, c])
             if k <= 0:
                 continue
-            cx = board_x0 + c*CELL + CELL//2
-            cy = board_y0 + r*CELL + CELL//2
+            cx = board_x0 + c * cell
+            cy = board_y0 + r * cell
             if k == 1:
-                pygame.draw.circle(screen, GREEN, (cx, cy), PLANT_R)
+                pygame.draw.circle(screen, GREEN, (cx + max(1, plant_r // 2), cy - max(1, plant_r // 2)), plant_r)
             else:
-                # 2株：画成两枚偏移的绿点
-                pygame.draw.circle(screen, GREEN, (cx - PLANT_R, cy), PLANT_R)
-                pygame.draw.circle(screen, GREEN, (cx + PLANT_R, cy), PLANT_R)
+                pygame.draw.circle(screen, GREEN, (cx - plant_r + 1, cy - 1), plant_r)
+                pygame.draw.circle(screen, GREEN, (cx + plant_r - 1, cy + 1), plant_r)
 
     pygame.display.flip()
+    return ly, buttons
 
 
 def main():
@@ -148,13 +263,16 @@ def main():
     state = GameState(cfg=cfg, board=board)
     engine = Engine(win_k=cfg.win_k)
 
-    W = MARGIN*2 + cfg.board_size*CELL
-    H = INFO_H + MARGIN*2 + cfg.board_size*CELL
-    screen = pygame.display.set_mode((W, H))
+    board_span = (cfg.board_size - 1) * CELL
+    board_pad = CELL // 2
+    W = MARGIN * 2 + board_span + board_pad * 2
+    H = INFO_H + MARGIN * 2 + board_span + board_pad * 2
+    screen = pygame.display.set_mode((W, H), pygame.RESIZABLE)
     pygame.display.set_caption("4ascend - Minimal UI")
     clock = pygame.time.Clock()
 
     running = True
+    edit_mode: str | None = None  # None | "black" | "white" | "plant"
     while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -166,18 +284,55 @@ def main():
                     # 重新开始
                     board = Board(cfg.board_size)
                     state = GameState(cfg=cfg, board=board)
+                    edit_mode = None
+            elif event.type == pygame.VIDEORESIZE:
+                w = max(520, event.w)
+                h = max(620, event.h)
+                screen = pygame.display.set_mode((w, h), pygame.RESIZABLE)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                rc = rc_from_pos(event.pos, cfg.board_size)
-                if rc is not None and not state.is_terminal():
-                    r, c = rc
-                    # NORMAL 或 ATTACK_DEFENSE 都允许点空位
+                layout = _compute_layout(*screen.get_size(), cfg.board_size)
+                buttons = _build_buttons(layout, edit_mode)
+                if buttons["black"].collidepoint(event.pos):
+                    edit_mode = "black"
+                    continue
+                if buttons["white"].collidepoint(event.pos):
+                    edit_mode = "white"
+                    continue
+                if buttons["plant"].collidepoint(event.pos):
+                    edit_mode = "plant"
+                    continue
+                if buttons["back"].collidepoint(event.pos):
+                    edit_mode = None
+                    continue
+
+                rc = rc_from_pos(event.pos, cfg.board_size, layout)
+                if rc is None:
+                    continue
+                r, c = rc
+
+                if edit_mode is not None:
+                    if edit_mode == "plant":
+                        curp = int(state.board.plants[r, c])
+                        state.board.plants[r, c] = (curp + 1) % 3
+                    else:
+                        target = 1 if edit_mode == "black" else 2
+                        other = 2 if target == 1 else 1
+                        cur = int(state.board.grid[r, c])
+                        if cur == target:
+                            state.board.grid[r, c] = 0
+                        elif cur == other:
+                            pass
+                        else:
+                            state.board.grid[r, c] = target
+                            if _makes_four(state.board.grid, r, c, target, need=4):
+                                state.board.grid[r, c] = 0
+                elif not state.is_terminal():
                     if state.board.grid[r, c] == 0:
                         try:
                             state = engine.step(state, Move(r, c))
                         except AssertionError:
-                            # 若处于 ATTACK_DEFENSE 阶段但未传动作等断言，这里忽略
                             pass
-        draw_board(screen, state)
+        draw_board(screen, state, edit_mode)
         clock.tick(60)
 
     pygame.quit()
