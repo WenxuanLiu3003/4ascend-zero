@@ -69,8 +69,8 @@ def launch_replay(trace: List, board_size: int = 9):
     pygame.init()
     board_span = (board_size - 1) * CELL
     board_pad = CELL // 2
-    W = MARGIN * 2 + board_span + board_pad * 2
-    H = INFO_H + MARGIN * 2 + board_span + board_pad * 2
+    W = 2 * (MARGIN * 2 + board_span + board_pad * 2)
+    H = 2 * (INFO_H + MARGIN * 2 + board_span + board_pad * 2)
     screen = pygame.display.set_mode((W, H), pygame.RESIZABLE)
     pygame.display.set_caption("4ascend - Self-play Replay Viewer")
     clock = pygame.time.Clock()

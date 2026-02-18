@@ -186,7 +186,15 @@ class MCTS:
             elif s.hp[1] < s.hp[0]:
                 loser_idx = 1
             else:
-                loser_idx = -1
+                # HP 相等时，用场上棋子数决胜（黑子=1，白子=2）
+                black_cnt = int(np.sum(s.board.grid == 1))
+                white_cnt = int(np.sum(s.board.grid == 2))
+                if black_cnt > white_cnt:
+                    loser_idx = 1
+                elif white_cnt > black_cnt:
+                    loser_idx = 0
+                else:
+                    loser_idx = -1
             
             if loser_idx >= 0:
                 loser = Player.BLACK if loser_idx == 0 else Player.WHITE

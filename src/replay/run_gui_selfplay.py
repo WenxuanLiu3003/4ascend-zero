@@ -29,7 +29,7 @@ def main():
         print("[replay] No checkpoint found. Using randomly initialized model.")
 
     # 生成一局完整自对弈的轨迹（不复用树，避免植物随机带来的偏差）
-    trace = generate_selfplay_trace(cfg, model, device=device, sims=10, temp_steps=0,
+    trace = generate_selfplay_trace(cfg, model, device=device, sims=1600, temp_steps=0,
                                     dir_alpha=0.3, dir_eps=0.25, use_tree_reuse=False)
 
     # 启动回放 GUI

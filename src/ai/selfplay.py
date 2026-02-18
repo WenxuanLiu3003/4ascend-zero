@@ -114,7 +114,15 @@ class SelfPlay:
         else:
             if s.hp[0] < s.hp[1]: loser_idx = 0
             elif s.hp[1] < s.hp[0]: loser_idx = 1
-            else: loser_idx = -1  # 平局
+            else:
+                black_cnt = int(np.sum(s.board.grid == 1))
+                white_cnt = int(np.sum(s.board.grid == 2))
+                if black_cnt > white_cnt:
+                    loser_idx = 1
+                elif white_cnt > black_cnt:
+                    loser_idx = 0
+                else:
+                    loser_idx = -1
         cur_player = init_state.to_play
         for i in range(len(data)):
             if loser_idx < 0:

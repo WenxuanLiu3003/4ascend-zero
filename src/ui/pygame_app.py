@@ -5,12 +5,17 @@ from __future__ import annotations
 import sys
 import pygame
 import numpy as np
+import torch
 
 from ..core.rules import RulesConfig
 from ..core.board import Board
 from ..core.state import GameState
 from ..core.types import Player, Phase, Move
 from ..core.engine import Engine
+from ..core.encoding import AlphaZeroStateEncoder
+from ..ai.model import PolicyValueNet
+from ..ai.mcts import MCTS
+from ..utils.checkpoint import latest_checkpoint_path, load_checkpoint
 
 # 颜色与UI参数
 BG = (245, 245, 245)
@@ -22,6 +27,7 @@ GREEN = (60, 160, 75)
 RED = (200, 60, 60)
 BLUE = (70, 100, 220)
 ORANGE = (245, 150, 60)
+RUN_RED = (220, 60, 60)
 
 CELL = 48            # 每格像素
 MARGIN = 32          # 棋盘外边距
@@ -30,6 +36,51 @@ STONE_R = 18         # 棋子半径
 PLANT_R = 6          # 植物小圆半径（最多画两个）
 GRID_EXT = 10        # 网格线向外延伸像素
 CLICK_TOL = 16       # 点击吸附到交叉点的容差（像素）
+RUN_MCTS_SIMS = 300
+
+
+class MCTSRunner:
+    def __init__(self, cfg: RulesConfig, engine: Engine):
+        self.cfg = cfg
+        self.engine = engine
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.encoder = AlphaZeroStateEncoder(last_k=8)
+        self.model = PolicyValueNet(in_planes=self.encoder.num_planes, board_size=cfg.board_size).to(self.device)
+        self.mcts = MCTS(
+            self.model,
+            self.encoder,
+            self.engine,
+            board_size=cfg.board_size,
+            c_puct=2.0,
+            sims=RUN_MCTS_SIMS,
+            dirichlet_alpha=0.3,
+            dirichlet_eps=0.0,  # 推理建议关闭根噪声，保持稳定
+            device=self.device,
+        )
+        self.loaded = False
+        self.load_msg = "Model not loaded"
+
+    def ensure_loaded(self):
+        if self.loaded:
+            return
+        ckpt = latest_checkpoint_path("checkpoints")
+        if ckpt is not None:
+            load_checkpoint(ckpt, self.model, optimizer=None, map_location=self.device)
+            self.load_msg = f"Loaded: {ckpt}"
+        else:
+            self.load_msg = "No checkpoint found, using random model"
+        self.model.eval()
+        self.loaded = True
+
+    def best_move(self, state: GameState):
+        self.ensure_loaded()
+        pi, _ = self.mcts.run(state, turn_related_sim=-1)
+        legal_mask = (state.board.grid == 0).astype(np.float32).reshape(-1)
+        pi = pi * legal_mask
+        if pi.sum() <= 1e-8:
+            return None
+        a = int(np.argmax(pi))
+        return divmod(a, self.cfg.board_size)
 
 
 def _makes_four(grid: np.ndarray, r: int, c: int, stone: int, need: int = 4) -> bool:
@@ -116,11 +167,13 @@ def _build_buttons(layout, edit_mode):
     black_rect = pygame.Rect(x0, y0, btn_w, btn_h)
     white_rect = pygame.Rect(x0, y0 + btn_h + gap, btn_w, btn_h)
     plant_rect = pygame.Rect(x0, y0 + (btn_h + gap) * 2, btn_w, btn_h)
-    back_rect = pygame.Rect(x0, y0 + (btn_h + gap) * 3, btn_w, btn_h)
+    run_rect = pygame.Rect(x0, y0 + (btn_h + gap) * 3, btn_w, btn_h)
+    back_rect = pygame.Rect(x0, y0 + (btn_h + gap) * 4, btn_w, btn_h)
     return {
         "black": black_rect,
         "white": white_rect,
         "plant": plant_rect,
+        "run": run_rect,
         "back": back_rect,
         "active_black": edit_mode == "black",
         "active_white": edit_mode == "white",
@@ -144,7 +197,7 @@ def rc_from_pos(pos, size, layout):
     return None
 
 
-def draw_board(screen, state: GameState, edit_mode: str | None):
+def draw_board(screen, state: GameState, edit_mode: str | None, run_best_rc, run_busy: bool, run_msg: str):
     screen.fill(BG)
     size = state.board.size
     win_w, win_h = screen.get_size()
@@ -193,11 +246,15 @@ def draw_board(screen, state: GameState, edit_mode: str | None):
     )
     y += small_h + ly["line_gap"]
     screen.blit(smallfont.render("[R] 重开  [Esc] 退出", True, BLACK), (x0, y))
+    y += small_h + ly["line_gap"]
+    if run_msg:
+        screen.blit(smallfont.render(run_msg, True, RUN_RED if run_busy else BLACK), (x0, y))
 
     buttons = _build_buttons(ly, edit_mode)
     _draw_button(screen, buttons["black"], "Black", smallfont, buttons["active_black"])
     _draw_button(screen, buttons["white"], "White", smallfont, buttons["active_white"])
     _draw_button(screen, buttons["plant"], "Plant", smallfont, buttons["active_plant"])
+    _draw_button(screen, buttons["run"], "Run", smallfont, active=run_busy)
     _draw_button(screen, buttons["back"], "Back", smallfont, active=False)
 
     board_x0 = ly["board_x0"]
@@ -251,6 +308,12 @@ def draw_board(screen, state: GameState, edit_mode: str | None):
                 pygame.draw.circle(screen, GREEN, (cx - plant_r + 1, cy - 1), plant_r)
                 pygame.draw.circle(screen, GREEN, (cx + plant_r - 1, cy + 1), plant_r)
 
+    if run_best_rc is not None:
+        rr, cc = run_best_rc
+        cx = board_x0 + cc * cell
+        cy = board_y0 + rr * cell
+        pygame.draw.circle(screen, RUN_RED, (cx, cy), stone_r + 8, 3)
+
     pygame.display.flip()
     return ly, buttons
 
@@ -262,17 +325,21 @@ def main():
     board = Board(cfg.board_size)
     state = GameState(cfg=cfg, board=board)
     engine = Engine(win_k=cfg.win_k)
+    mcts_runner = MCTSRunner(cfg, engine)
 
     board_span = (cfg.board_size - 1) * CELL
     board_pad = CELL // 2
-    W = MARGIN * 2 + board_span + board_pad * 2
-    H = INFO_H + MARGIN * 2 + board_span + board_pad * 2
+    W = 2 * (MARGIN * 2 + board_span + board_pad * 2)
+    H = 2 * (INFO_H + MARGIN * 2 + board_span + board_pad * 2)
     screen = pygame.display.set_mode((W, H), pygame.RESIZABLE)
     pygame.display.set_caption("4ascend - Minimal UI")
     clock = pygame.time.Clock()
 
     running = True
     edit_mode: str | None = None  # None | "black" | "white" | "plant"
+    run_busy = False
+    run_best_rc = None
+    run_msg = ""
     while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -285,6 +352,9 @@ def main():
                     board = Board(cfg.board_size)
                     state = GameState(cfg=cfg, board=board)
                     edit_mode = None
+                    run_best_rc = None
+                    run_busy = False
+                    run_msg = ""
             elif event.type == pygame.VIDEORESIZE:
                 w = max(520, event.w)
                 h = max(620, event.h)
@@ -293,18 +363,42 @@ def main():
                 layout = _compute_layout(*screen.get_size(), cfg.board_size)
                 buttons = _build_buttons(layout, edit_mode)
                 if buttons["black"].collidepoint(event.pos):
+                    if run_busy:
+                        continue
                     edit_mode = "black"
                     continue
                 if buttons["white"].collidepoint(event.pos):
+                    if run_busy:
+                        continue
                     edit_mode = "white"
                     continue
                 if buttons["plant"].collidepoint(event.pos):
+                    if run_busy:
+                        continue
                     edit_mode = "plant"
                     continue
+                if buttons["run"].collidepoint(event.pos):
+                    if edit_mode is not None or run_busy or state.is_terminal():
+                        continue
+                    run_busy = True
+                    run_msg = "Running MCTS..."
+                    draw_board(screen, state, edit_mode, run_best_rc, run_busy, run_msg)
+                    try:
+                        run_best_rc = mcts_runner.best_move(state)
+                        run_msg = "MCTS done" if run_best_rc is not None else "No legal move"
+                    except Exception as exc:
+                        run_best_rc = None
+                        run_msg = f"Run failed: {exc}"
+                    run_busy = False
+                    continue
                 if buttons["back"].collidepoint(event.pos):
+                    if run_busy:
+                        continue
                     edit_mode = None
                     continue
 
+                if run_busy:
+                    continue
                 rc = rc_from_pos(event.pos, cfg.board_size, layout)
                 if rc is None:
                     continue
@@ -330,9 +424,11 @@ def main():
                     if state.board.grid[r, c] == 0:
                         try:
                             state = engine.step(state, Move(r, c))
+                            run_best_rc = None
+                            run_msg = ""
                         except AssertionError:
                             pass
-        draw_board(screen, state, edit_mode)
+        draw_board(screen, state, edit_mode, run_best_rc, run_busy, run_msg)
         clock.tick(60)
 
     pygame.quit()
