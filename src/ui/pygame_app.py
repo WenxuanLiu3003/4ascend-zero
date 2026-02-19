@@ -5,16 +5,12 @@ from __future__ import annotations
 import sys
 import pygame
 import numpy as np
-import torch
 
 from ..core.rules import RulesConfig
 from ..core.board import Board
 from ..core.state import GameState
 from ..core.types import Player, Phase, Move
 from ..core.engine import Engine
-from ..core.encoding import AlphaZeroStateEncoder
-from ..ai.model import PolicyValueNet
-from ..ai.mcts import MCTS
 from ..utils.checkpoint import latest_checkpoint_path, load_checkpoint
 
 # 颜色与UI参数
@@ -36,11 +32,17 @@ STONE_R = 18         # 棋子半径
 PLANT_R = 6          # 植物小圆半径（最多画两个）
 GRID_EXT = 10        # 网格线向外延伸像素
 CLICK_TOL = 16       # 点击吸附到交叉点的容差（像素）
-RUN_MCTS_SIMS = 300
+RUN_MCTS_SIMS = 1600
 
 
 class MCTSRunner:
     def __init__(self, cfg: RulesConfig, engine: Engine):
+        # 延迟导入 AI 依赖，避免窗口创建前卡在 torch/cuda 初始化
+        import torch
+        from ..core.encoding import AlphaZeroStateEncoder
+        from ..ai.model import PolicyValueNet
+        from ..ai.mcts import MCTS
+
         self.cfg = cfg
         self.engine = engine
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -325,7 +327,7 @@ def main():
     board = Board(cfg.board_size)
     state = GameState(cfg=cfg, board=board)
     engine = Engine(win_k=cfg.win_k)
-    mcts_runner = MCTSRunner(cfg, engine)
+    mcts_runner = None
 
     board_span = (cfg.board_size - 1) * CELL
     board_pad = CELL // 2
@@ -381,9 +383,13 @@ def main():
                     if edit_mode is not None or run_busy or state.is_terminal():
                         continue
                     run_busy = True
-                    run_msg = "Running MCTS..."
+                    run_msg = "Initializing MCTS..."
                     draw_board(screen, state, edit_mode, run_best_rc, run_busy, run_msg)
                     try:
+                        if mcts_runner is None:
+                            mcts_runner = MCTSRunner(cfg, engine)
+                        run_msg = "Running MCTS..."
+                        draw_board(screen, state, edit_mode, run_best_rc, run_busy, run_msg)
                         run_best_rc = mcts_runner.best_move(state)
                         run_msg = "MCTS done" if run_best_rc is not None else "No legal move"
                     except Exception as exc:

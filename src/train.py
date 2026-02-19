@@ -75,7 +75,7 @@ class AZLiteTrainer:
 
     # —— 单进程自博弈 —— #
     def _self_play_batch_serial(self, games=8, sims=400) -> List[Tuple[np.ndarray, np.ndarray, int, float]]:
-        sp = SelfPlay(self.model, self.encoder, self.engine,
+        sp = SelfPlay(self.model, self.encoder, self.engine, c_puct=4.0,
                       board_size=self.cfg.board_size, sims=sims, device=self.device,
                       use_tree_reuse=self.reuse_tree)
         dataset = []
@@ -245,7 +245,7 @@ def _delete_dataset_files(dataset_dir: str) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="training parameters")
     parser.add_argument('--epoch', type=int, default=1, help='Number of training epochs')
-    parser.add_argument('--sim', type=int, default=1200, help='Number of simulations')
+    parser.add_argument('--sim', type=int, default=1600, help='Number of simulations')
     default_save_path = "checkpoints" if __IF__HPC__ else "checkpoints"
     if __IF__DEBUG__:
         default_save_path = "/insomnia001/depts/free/users/wl3003/4ascend-model/checkpoints"
