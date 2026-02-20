@@ -3,6 +3,7 @@ from typing import List, Tuple
 import os
 import time
 import random
+import pickle
 import numpy as np
 import torch
 import torch.nn as nn
@@ -75,7 +76,7 @@ class AZLiteTrainer:
 
     # —— 单进程自博弈 —— #
     def _self_play_batch_serial(self, games=8, sims=400) -> List[Tuple[np.ndarray, np.ndarray, int, float]]:
-        sp = SelfPlay(self.model, self.encoder, self.engine, c_puct=4.0,
+        sp = SelfPlay(self.model, self.encoder, self.engine, c_puct=2.0,
                       board_size=self.cfg.board_size, sims=sims, device=self.device,
                       use_tree_reuse=self.reuse_tree)
         dataset = []
@@ -203,9 +204,6 @@ class AZLiteTrainer:
             save_checkpoint(path, self.model, self.opt, global_step=self.global_step)
             print(f"[train] checkpoint saved (interrupt): {path}")
 
-def _dataset_dir(default_save_path: str) -> str:
-    return os.path.join(default_save_path, "dataset")
-
 def _unique_dataset_path(dataset_dir: str) -> str:
     ensure_dir(dataset_dir)
     stamp = int(time.time() * 1000)
@@ -217,22 +215,28 @@ def _save_dataset_file(dataset_dir: str, data: List[Tuple[np.ndarray, np.ndarray
     torch.save(data, path)
     return path
 
-def _load_all_datasets(dataset_dir: str) -> List[Tuple[np.ndarray, np.ndarray, int, float]]:
+def _list_dataset_files(dataset_dir: str) -> List[str]:
     if not os.path.isdir(dataset_dir):
         return []
-    files = sorted(
-        f for f in os.listdir(dataset_dir)
-        if os.path.isfile(os.path.join(dataset_dir, f))
+    valid_suffixes = (".pt", ".pth")
+    return sorted(
+        os.path.join(dataset_dir, f)
+        for f in os.listdir(dataset_dir)
+        if os.path.isfile(os.path.join(dataset_dir, f)) and f.endswith(valid_suffixes)
     )
+
+def _load_dataset_files(file_paths: List[str]) -> List[Tuple[np.ndarray, np.ndarray, int, float]]:
     data = []
-    for fname in files:
-        path = os.path.join(dataset_dir, fname)
+    for path in file_paths:
         # Dataset files are produced by this codebase; allow full unpickling.
         try:
             data.extend(torch.load(path, map_location=device, weights_only=False))
-        except (EOFError, RuntimeError, ValueError) as exc:
+        except (EOFError, RuntimeError, ValueError, pickle.UnpicklingError) as exc:
             print(f"[trainOnly] skipped corrupted dataset file: {path}. error={exc}")
     return data
+
+def _load_all_datasets(dataset_dir: str) -> List[Tuple[np.ndarray, np.ndarray, int, float]]:
+    return _load_dataset_files(_list_dataset_files(dataset_dir))
 
 def _delete_dataset_files(dataset_dir: str) -> None:
     if not os.path.isdir(dataset_dir):
@@ -251,13 +255,17 @@ if __name__ == "__main__":
         default_save_path = "/insomnia001/depts/free/users/wl3003/4ascend-model/checkpoints"
     parser.add_argument('--savePath', type=str, default=default_save_path, help='model path')
     parser.add_argument('--game', type=int, default=100, help='Number of games per epoch')
-    parser.add_argument('--batch', type=int, default=256, help='Number of batch')
+    parser.add_argument('--batch', type=int, default=1024, help='Number of batch')
     parser.add_argument('--playOnly', action='store_true', help='Only run self-play and save datasets')
     parser.add_argument('--trainOnly', action='store_true', help='Only train using datasets on disk')
+    parser.add_argument('--trainFileChunk', type=int, default=20,
+                        help='Number of dataset files loaded into RAM per trainOnly chunk')
     args = parser.parse_args()
 
     if args.playOnly and args.trainOnly:
         raise ValueError("playOnly and trainOnly cannot both be True.")
+    if args.trainFileChunk <= 0:
+        raise ValueError("trainFileChunk must be > 0.")
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print("using %s as device." % torch.cuda.get_device_name(torch.cuda.current_device()))
@@ -267,7 +275,7 @@ if __name__ == "__main__":
                             shaped_reward_enabled=False,   # ← 打开/关闭 奖励塑形
                             shaped_reward_coeff=0.05,     # ← 微奖励系数 λ
                             reuse_tree=False)             # ← 是否根复用（默认关闭）
-    dataset_dir = _dataset_dir(default_save_path)
+    dataset_dir = os.path.join(default_save_path, "dataset")
     ensure_dir(dataset_dir)
 
     if args.playOnly:
@@ -281,15 +289,31 @@ if __name__ == "__main__":
                 print(f"[playOnly] saved dataset: {path} (games={chunk}, samples={len(data)})")
                 remaining -= chunk
     elif args.trainOnly:
-        data = _load_all_datasets(dataset_dir)
-        print(f"[trainOnly] loaded samples: {len(data)}")
+        all_files = _list_dataset_files(dataset_dir)
+        print(f"[trainOnly] found dataset files: {len(all_files)}")
+        if len(all_files) == 0:
+            print("[trainOnly] no dataset files found; nothing to train.")
         for ep in range(args.epoch):
-            random.shuffle(data)
             print(f"[trainOnly] Epoch {ep+1}/{args.epoch}: training...")
-            for i in tqdm(range(0, len(data), args.batch), desc="Train", unit="batch"):
-                batch = data[i:i+args.batch]
-                loss, lp, lv = trainer.train_step(batch)
-                tqdm.write(f"[train] step={trainer.global_step} loss={loss:.4f} (p={lp:.4f}, v={lv:.4f})")
+            epoch_files = list(all_files)
+            random.shuffle(epoch_files)
+            chunk_files_total = (len(epoch_files) + args.trainFileChunk - 1) // args.trainFileChunk
+            for chunk_idx in range(0, len(epoch_files), args.trainFileChunk):
+                file_chunk = epoch_files[chunk_idx:chunk_idx + args.trainFileChunk]
+                data = _load_dataset_files(file_chunk)
+                if len(data) == 0:
+                    continue
+                random.shuffle(data)
+                chunk_no = chunk_idx // args.trainFileChunk + 1
+                print(
+                    f"[trainOnly] epoch {ep+1}: loaded chunk {chunk_no}/{chunk_files_total} "
+                    f"(files={len(file_chunk)}, samples={len(data)})"
+                )
+                for i in tqdm(range(0, len(data), args.batch), desc="Train", unit="batch"):
+                    batch = data[i:i+args.batch]
+                    loss, lp, lv = trainer.train_step(batch)
+                    tqdm.write(f"[train] step={trainer.global_step} loss={loss:.4f} (p={lp:.4f}, v={lv:.4f})")
+                del data
         saved_ok = False
         try:
             ensure_dir(args.savePath)
