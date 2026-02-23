@@ -163,7 +163,7 @@ def main() -> None:
     default_path = "checkpoints"
     parser.add_argument("--savePath", type=str, default=default_path, help="path to checkpoints")
     parser.add_argument("--num_game", type=int, default=9, help="games per pair (1v1)")
-    parser.add_argument("--sim", type=int, default=1200, help="MCTS simulations per move")
+    parser.add_argument("--sim", type=int, default=800, help="MCTS simulations per move")
     parser.add_argument("--board_size", type=int, default=9)
     parser.add_argument("--win_k", type=int, default=4)
     parser.add_argument("--hp_max", type=int, default=6)

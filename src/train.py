@@ -43,7 +43,7 @@ class AZLiteTrainer:
         self.model = PolicyValueNet(in_planes=self.encoder.num_planes, board_size=board_size).to(device)
         print("trainable parameters: %d" % sum(p.numel() for p in self.model.parameters() if p.requires_grad) )
         self.model.eval()
-        self.opt = optim.Adam(self.model.parameters(), lr=1e-3, weight_decay=1e-4)
+        self.opt = optim.Adam(self.model.parameters(), lr=1e-4, weight_decay=1e-4)
         self.ce = nn.KLDivLoss(reduction='batchmean')
         self.mse = nn.MSELoss()
 
@@ -76,7 +76,7 @@ class AZLiteTrainer:
 
     # —— 单进程自博弈 —— #
     def _self_play_batch_serial(self, games=8, sims=400) -> List[Tuple[np.ndarray, np.ndarray, int, float]]:
-        sp = SelfPlay(self.model, self.encoder, self.engine, c_puct=2.0,
+        sp = SelfPlay(self.model, self.encoder, self.engine, c_puct=2.5,
                       board_size=self.cfg.board_size, sims=sims, device=self.device,
                       use_tree_reuse=self.reuse_tree)
         dataset = []
@@ -255,10 +255,10 @@ if __name__ == "__main__":
         default_save_path = "/insomnia001/depts/free/users/wl3003/4ascend-model/checkpoints"
     parser.add_argument('--savePath', type=str, default=default_save_path, help='model path')
     parser.add_argument('--game', type=int, default=100, help='Number of games per epoch')
-    parser.add_argument('--batch', type=int, default=1024, help='Number of batch')
+    parser.add_argument('--batch', type=int, default=2048, help='Number of batch')
     parser.add_argument('--playOnly', action='store_true', help='Only run self-play and save datasets')
     parser.add_argument('--trainOnly', action='store_true', help='Only train using datasets on disk')
-    parser.add_argument('--trainFileChunk', type=int, default=20,
+    parser.add_argument('--trainFileChunk', type=int, default=120,
                         help='Number of dataset files loaded into RAM per trainOnly chunk')
     args = parser.parse_args()
 
