@@ -3,6 +3,7 @@
 # ──────────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 import sys
+import argparse
 import pygame
 import numpy as np
 
@@ -76,13 +77,16 @@ class MCTSRunner:
 
     def best_move(self, state: GameState):
         self.ensure_loaded()
-        pi, _ = self.mcts.run(state, turn_related_sim=-1)
+        pi, root = self.mcts.run(state, turn_related_sim=-1)
         legal_mask = (state.board.grid == 0).astype(np.float32).reshape(-1)
         pi = pi * legal_mask
         if pi.sum() <= 1e-8:
-            return None
+            return None, None
         a = int(np.argmax(pi))
-        return divmod(a, self.cfg.board_size)
+        # 用该动作对应子节点 Q 近似“当前执手若下此处的胜率”
+        q = root.children[a].Q if a in root.children else 0.0
+        win_rate = float(np.clip((q + 1.0) * 0.5, 0.0, 1.0))
+        return divmod(a, self.cfg.board_size), win_rate
 
 
 def _makes_four(grid: np.ndarray, r: int, c: int, stone: int, need: int = 4) -> bool:
@@ -183,6 +187,31 @@ def _build_buttons(layout, edit_mode):
     }
 
 
+def _build_grow_buttons(layout, win_w):
+    """构建 grow_count +/- 按钮，位置贴近 grow_count 信息行。"""
+    font = pygame.font.SysFont(None, layout["font_mid"])
+    bigfont = pygame.font.SysFont(None, layout["font_big"])
+    smallfont = pygame.font.SysFont(None, layout["font_small"])
+
+    y = layout["margin"]
+    y += bigfont.get_height() + layout["line_gap"]
+    y += layout["hp_h"] + font.get_height() + layout["line_gap"]
+    y += layout["hp_h"] + font.get_height() + layout["line_gap"]
+    # 到达 grow_count 所在行
+    line_h = smallfont.get_height()
+
+    btn = max(18, int(layout["font_small"] * 1.2))
+    gap = max(4, int(layout["line_gap"]))
+    x = min(
+        win_w - layout["margin"] - (btn * 2 + gap),
+        layout["margin"] + int(win_w * 0.62),
+    )
+    y_btn = y + (line_h - btn) // 2
+    plus_rect = pygame.Rect(x, y_btn, btn, btn)
+    minus_rect = pygame.Rect(x + btn + gap, y_btn, btn, btn)
+    return {"plus": plus_rect, "minus": minus_rect}
+
+
 def rc_from_pos(pos, size, layout):
     x, y = pos
     board_x0 = layout["board_x0"]
@@ -199,7 +228,16 @@ def rc_from_pos(pos, size, layout):
     return None
 
 
-def draw_board(screen, state: GameState, edit_mode: str | None, run_best_rc, run_busy: bool, run_msg: str):
+def draw_board(
+    screen,
+    state: GameState,
+    edit_mode: str | None,
+    run_best_rc,
+    run_best_winrate,
+    run_busy: bool,
+    run_msg: str,
+    show_refresh_notice: bool,
+):
     screen.fill(BG)
     size = state.board.size
     win_w, win_h = screen.get_size()
@@ -246,11 +284,17 @@ def draw_board(screen, state: GameState, edit_mode: str | None, run_best_rc, run
         ),
         (x0, y),
     )
+    grow_btns = _build_grow_buttons(ly, win_w)
+    _draw_button(screen, grow_btns["plus"], "+", smallfont, active=False)
+    _draw_button(screen, grow_btns["minus"], "-", smallfont, active=False)
     y += small_h + ly["line_gap"]
     screen.blit(smallfont.render("[R] 重开  [Esc] 退出", True, BLACK), (x0, y))
     y += small_h + ly["line_gap"]
     if run_msg:
         screen.blit(smallfont.render(run_msg, True, RUN_RED if run_busy else BLACK), (x0, y))
+    elif show_refresh_notice:
+        refresh_font = pygame.font.SysFont(None, max(28, int(ly["font_small"] * 1.8)))
+        screen.blit(refresh_font.render("Refresh", True, RUN_RED), (x0, y))
 
     buttons = _build_buttons(ly, edit_mode)
     _draw_button(screen, buttons["black"], "Black", smallfont, buttons["active_black"])
@@ -315,12 +359,23 @@ def draw_board(screen, state: GameState, edit_mode: str | None, run_best_rc, run
         cx = board_x0 + cc * cell
         cy = board_y0 + rr * cell
         pygame.draw.circle(screen, RUN_RED, (cx, cy), stone_r + 8, 3)
+        if run_best_winrate is not None:
+            txt = f"{int(round(run_best_winrate * 100))}%"
+            rate_font = pygame.font.SysFont(None, max(14, int(stone_r * 1.2)))
+            label = rate_font.render(txt, True, RUN_RED)
+            lx = cx - label.get_width() // 2
+            ly_txt = cy - label.get_height() // 2
+            screen.blit(label, (lx, ly_txt))
 
     pygame.display.flip()
-    return ly, buttons
+    return ly, buttons, grow_btns
 
 
 def main():
+    parser = argparse.ArgumentParser(description="4ascend pygame app")
+    parser.add_argument("--NoAutoRefresh", action="store_true", help="Disable plant auto-refresh on real moves")
+    args = parser.parse_args()
+
     pygame.init()
     # 配置规则
     cfg = RulesConfig(board_size=9, win_k=4, hp_max=6)
@@ -341,7 +396,9 @@ def main():
     edit_mode: str | None = None  # None | "black" | "white" | "plant"
     run_busy = False
     run_best_rc = None
+    run_best_winrate = None
     run_msg = ""
+    refresh_notice_turn = -1
     while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -355,14 +412,24 @@ def main():
                     state = GameState(cfg=cfg, board=board)
                     edit_mode = None
                     run_best_rc = None
+                    run_best_winrate = None
                     run_busy = False
                     run_msg = ""
+                    refresh_notice_turn = -1
             elif event.type == pygame.VIDEORESIZE:
                 w = max(520, event.w)
                 h = max(620, event.h)
                 screen = pygame.display.set_mode((w, h), pygame.RESIZABLE)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 layout = _compute_layout(*screen.get_size(), cfg.board_size)
+                grow_btns = _build_grow_buttons(layout, screen.get_width())
+                if grow_btns["plus"].collidepoint(event.pos):
+                    state.grow_count += 1
+                    continue
+                if grow_btns["minus"].collidepoint(event.pos):
+                    if state.grow_count > 1:
+                        state.grow_count -= 1
+                    continue
                 buttons = _build_buttons(layout, edit_mode)
                 if buttons["black"].collidepoint(event.pos):
                     if run_busy:
@@ -384,16 +451,23 @@ def main():
                         continue
                     run_busy = True
                     run_msg = "Initializing MCTS..."
-                    draw_board(screen, state, edit_mode, run_best_rc, run_busy, run_msg)
+                    draw_board(
+                        screen, state, edit_mode, run_best_rc, run_best_winrate, run_busy, run_msg,
+                        show_refresh_notice=(refresh_notice_turn == state.turn),
+                    )
                     try:
                         if mcts_runner is None:
                             mcts_runner = MCTSRunner(cfg, engine)
                         run_msg = "Running MCTS..."
-                        draw_board(screen, state, edit_mode, run_best_rc, run_busy, run_msg)
-                        run_best_rc = mcts_runner.best_move(state)
+                        draw_board(
+                            screen, state, edit_mode, run_best_rc, run_best_winrate, run_busy, run_msg,
+                            show_refresh_notice=(refresh_notice_turn == state.turn),
+                        )
+                        run_best_rc, run_best_winrate = mcts_runner.best_move(state)
                         run_msg = "MCTS done" if run_best_rc is not None else "No legal move"
                     except Exception as exc:
                         run_best_rc = None
+                        run_best_winrate = None
                         run_msg = f"Run failed: {exc}"
                     run_busy = False
                     continue
@@ -429,12 +503,21 @@ def main():
                 elif not state.is_terminal():
                     if state.board.grid[r, c] == 0:
                         try:
+                            prev_plants = state.board.plants.copy()
                             state = engine.step(state, Move(r, c))
+                            if args.NoAutoRefresh and not np.array_equal(state.board.plants, prev_plants):
+                                state.board.plants[:, :] = prev_plants
+                                refresh_notice_turn = state.turn
+                                edit_mode = "plant"
                             run_best_rc = None
+                            run_best_winrate = None
                             run_msg = ""
                         except AssertionError:
                             pass
-        draw_board(screen, state, edit_mode, run_best_rc, run_busy, run_msg)
+        draw_board(
+            screen, state, edit_mode, run_best_rc, run_best_winrate, run_busy, run_msg,
+            show_refresh_notice=(refresh_notice_turn == state.turn),
+        )
         clock.tick(60)
 
     pygame.quit()
