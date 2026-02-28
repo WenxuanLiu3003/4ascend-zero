@@ -34,6 +34,7 @@ class GameState:
     just_unascend: bool = False
     grow_count: int = 11
     unascend_charge: int = 25
+    Aunascend_charge_fast: np.ndarray = field(default_factory=lambda: np.array([9, 9], dtype=np.int32))
 
     def copy(self) -> "GameState":
         return GameState(
@@ -51,6 +52,7 @@ class GameState:
             just_unascend=self.just_unascend,
             grow_count=self.grow_count,
             unascend_charge=self.unascend_charge,
+            Aunascend_charge_fast=self.Aunascend_charge_fast.copy(),
         )
     
     # 基础查询与终局

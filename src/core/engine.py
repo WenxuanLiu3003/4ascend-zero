@@ -82,7 +82,9 @@ class Engine:
             if ns.unascend_charge > 0:
                 ns.unascend_charge -= 1
 
-            
+            for index in range(2):
+                if ns.Aunascend_charge_fast[index] > 0:
+                    ns.Aunascend_charge_fast[index] -= 1
 
         elif ns.phase is Phase.ATTACK_DEFENSE:
             # 记录本手的防守方（当前执手）
@@ -123,8 +125,6 @@ class Engine:
 
             # 回到 NORMAL；清 mask；轮到进攻方对手（即当前 defender 的对手）
             ns.phase = Phase.NORMAL
-            ns.unascend_charge = int(max(12.5, min(ns.unascend_charge + (25 - ns.unascend_charge) * 0.4, 25)))
-
             ns.attack_chain_mask = None
             ns.to_play = _other(defender)
             
@@ -151,7 +151,15 @@ class Engine:
                 if ns.grow_count % 2 == 0:
                     ns.grow_count -= 1
                 
-                ns.just_unascend = True
+                if s.phase == Phase.ATTACK_DEFENSE:
+                    ns.just_unascend = True
+                    ns.unascend_charge = int(max(12.5, min(ns.unascend_charge + (25 - ns.unascend_charge) * 0.4, 25)))
+                    pr = 0 if ns.to_play is Player.BLACK else 1
+                    ns.Aunascend_charge_fast[pr] = max(
+                        ns.Aunascend_charge_fast[pr],
+                        4 if ns.over_fill else 9,
+                    )
+
 
         return ns
 
@@ -359,6 +367,12 @@ class Engine:
         weighted_candidates = []
         attacker_idx = s.to_play.value
         defender_idx = s.to_play.other().value
+        index1 = 0 if s.to_play is Player.BLACK else 1
+        flag1 = s.Aunascend_charge_fast[index1] > 0
+        flag2 = s.Aunascend_charge_fast[1 - index1] > 0
+        flag4 = just_ascend and s.unascend_charge <= 0
+        ovr_buff = []
+        num1 = [0, 0]
         for (r, c) in candidates:
             black_max_align, black_max_align_total = self._calc_align_stats_for_candidate(
                 board, r, c, stone_id=1
@@ -367,45 +381,121 @@ class Engine:
                 board, r, c, stone_id=2
             )
             # 刷草位置逻辑
+            max_align = [black_max_align, white_max_align]  # [黑方0, 白方1]
+            _ovr_bits = [0, 0]
             weight = 500 + random.randint(0, 20)
+            flag5 = False
             if max(black_max_align, white_max_align) >= 4:
                 if s.over_fill:
                     weight += 450
                     if board.plants[r, c] > 0:
                         weight += 100
+
+                    if max_align[index1] < 4 and not flag2:
+                        _ovr_bits[1] = 1
+                    if max_align[1 - index1] < 4 and not flag1:
+                        _ovr_bits[0] = 1
                 else:
                     weight -= 450
 
             if just_ascend:
-                max_align = [black_max_align, white_max_align]  # [黑方0, 白方1]
                 max_align_total = [black_max_align_total, white_max_align_total]  # [黑方0, 白方1]
                 if max_align_total[attacker_idx] > max_align_total[defender_idx]:
                     weight += (max_align_total[attacker_idx] - max_align_total[defender_idx]) * 3
                 if max_align[attacker_idx] > max_align[defender_idx]:
                     weight += (max_align[attacker_idx] - max_align[defender_idx]) * 15
-                if s.unascend_charge <= 0:
-                    weight += int(zsin(25 - s.unascend_charge, 25.0) * 120.0)
-            else:
+                if max_align[attacker_idx] == 3 and max_align[defender_idx] <= 1:
+                    if flag4:
+                        flag5 = True
+                    else:
+                        weight += int(zsin(25 - s.unascend_charge, 25.0) * 120.0)
+            else:   
                 pass  # TODO: 这里有一段weight更新逻辑没有实现，对应源代码TTRPlant.cs的第229-236行
-            if board.plants[r, c] > 0 and not (just_ascend and s.unascend_charge <= 0):
+            if board.plants[r, c] > 0 and not flag4:
                 weight -= 30
             elif True:
                 pass  # TODO: 这里有一段更新逻辑没有实现，对应源代码TTRPlant.cs第239-240行
-            
 
-            weighted_candidates.append(
-                {
-                    "weight": weight,
-                    "r": r,
-                    "c": c,
-                    "max_align": [black_max_align, white_max_align],  # [黑方0, 白方1]
-                    "max_align_total": [black_max_align_total, white_max_align_total],  # [黑方0, 白方1]
-                }
-            )
+            if _ovr_bits[0] or _ovr_bits[1]:
+                ovr_buff.append(
+                    {
+                        "weight": weight,
+                        "r": r,
+                        "c": c,
+                        "ovr_bits": _ovr_bits,
+                        "max_align_total": [black_max_align_total, white_max_align_total],  # [黑方0, 白方1]
+                        "max_align": [black_max_align, white_max_align],  # [黑方0, 白方1]
+                    }
+                )
+                num1[0] = max(num1[0], _ovr_bits[0])
+                num1[1] = max(num1[1], _ovr_bits[1])
+            else:
+                weighted_candidates.append(
+                    {
+                        "weight": weight,
+                        "r": r,
+                        "c": c,
+                        "max_align": [black_max_align, white_max_align],  # [黑方0, 白方1]
+                        "max_align_total": [black_max_align_total, white_max_align_total],  # [黑方0, 白方1]
+                        "ovr_bits": [0, 0]
+                    }
+                )
+                if flag5:
+                    k += 1
+                    weighted_candidates.append(
+                        {
+                            "weight": weight + 30 - random.randint(0, 89),
+                            "r": r,
+                            "c": c,
+                            "max_align": [black_max_align, white_max_align],  # [黑方0, 白方1]
+                            "max_align_total": [black_max_align_total, white_max_align_total],  # [黑方0, 白方1]
+                            "ovr_bits": [0, 0]
+                        }
+                    )
+
+        if ovr_buff:
+            random.shuffle(ovr_buff)
+            for ovr in ovr_buff:
+                overBits = ovr["ovr_bits"]
+                matched = False
+                for i in range(2):
+                    if num1[i] == 1 and overBits[i] == 1:
+                        num1[i] = 0
+                        matched = True
+                if matched:
+                    k += 1
+                    weighted_candidates.append(
+                        {
+                            "weight": ovr["weight"] + 40 - random.randint(0, 119),
+                            "r": ovr["r"],
+                            "c": ovr["c"],
+                            "max_align": ovr["max_align"],  # [黑方0, 白方1]
+                            "max_align_total": ovr["max_align_total"],  # [黑方0, 白方1]
+                            "ovr_bits": ovr["ovr_bits"]
+                        }
+                    )
+                
+
+        k = min(k, 6)
 
         weighted_candidates.sort(key=lambda x: x["weight"], reverse=True)
-        for item in weighted_candidates[:k]:
-            board.plants[item["r"], item["c"]] = min(2, board.plants[item["r"], item["c"]] + 1)
+        refreshed = 0
+        for item in weighted_candidates:
+            if refreshed >= k:
+                break
+            r, c = item["r"], item["c"]
+            if board.plants[r, c] >= 2:
+                continue
+            board.plants[r, c] += 1
+            refreshed += 1
+            over_bits = item.get("ovr_bits", [0, 0])
+            if over_bits[index1] == 1:
+                s.Aunascend_charge_fast[index1] = max(s.Aunascend_charge_fast[index1], 4)
+            other_idx = 1 - index1
+            if over_bits[other_idx] == 1:
+                s.Aunascend_charge_fast[other_idx] = max(s.Aunascend_charge_fast[other_idx], 4)
+
+
 
     # ──────────────────────────────────────────────────────────────────────────
     # 杂项
