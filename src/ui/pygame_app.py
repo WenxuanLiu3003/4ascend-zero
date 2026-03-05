@@ -503,12 +503,25 @@ def main():
                 elif not state.is_terminal():
                     if state.board.grid[r, c] == 0:
                         try:
+                            prev_phase = state.phase
                             prev_plants = state.board.plants.copy()
+                            prev_grid = state.board.grid.copy()
+                            prev_attack_mask = (
+                                state.attack_chain_mask.copy()
+                                if state.attack_chain_mask is not None
+                                else np.zeros_like(prev_grid, dtype=np.uint8)
+                            )
                             state = engine.step(state, Move(r, c))
-                            if args.NoAutoRefresh and not np.array_equal(state.board.plants, prev_plants):
-                                state.board.plants[:, :] = prev_plants
-                                refresh_notice_turn = state.turn
-                                edit_mode = "plant"
+                            if args.NoAutoRefresh:
+                                if not np.array_equal(state.board.plants, prev_plants):
+                                    state.board.plants[:, :] = prev_plants
+                                    refresh_notice_turn = state.turn
+                                    edit_mode = "plant"
+
+                                # 仅当上一个状态为 ATTACK_DEFENSE 时，执行清草规则
+                                if prev_phase is Phase.ATTACK_DEFENSE:
+                                    clear_mask = ((prev_grid > 0) | (prev_attack_mask > 0)) & (state.board.grid == 0)
+                                    state.board.plants[clear_mask] = 0
                             run_best_rc = None
                             run_best_winrate = None
                             run_msg = ""
