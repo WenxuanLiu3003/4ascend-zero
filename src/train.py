@@ -57,7 +57,7 @@ class AZLiteTrainer:
         self.shaped_reward_enabled = bool(shaped_reward_enabled)
         self.shaped_reward_coeff = float(shaped_reward_coeff)
 
-        # 自博弈时是否启用根节点树复用（你的棋有随机植物，默认关）
+        # 自博弈时是否启用根节点树复用（默认关）
         self.reuse_tree = bool(reuse_tree)
 
         ckpt = latest_checkpoint_path(self.save_dir)
