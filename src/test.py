@@ -159,7 +159,7 @@ def evaluate_models(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate checkpoints via 1v1 matches.")
-    default_path = "/insomnia001/depts/free/users/wl3003/4ascend-model/checkpoints"
+    default_path = "/insomnia001/depts/free/users/wl3003/4ascend-model/model-v3/checkpoints/"
     # default_path = "checkpoints"
     parser.add_argument("--savePath", type=str, default=default_path, help="path to checkpoints")
     parser.add_argument("--num_game", type=int, default=9, help="games per pair (1v1)")

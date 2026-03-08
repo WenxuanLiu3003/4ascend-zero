@@ -249,10 +249,10 @@ def _delete_dataset_files(dataset_dir: str) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="training parameters")
     parser.add_argument('--epoch', type=int, default=1, help='Number of training epochs')
-    parser.add_argument('--sim', type=int, default=1600, help='Number of simulations')
-    default_save_path = "/insomnia001/depts/free/users/wl3003/4ascend-model/checkpoints" if __IF__HPC__ else "checkpoints"
+    parser.add_argument('--sim', type=int, default=5, help='Number of simulations')
+    default_save_path = "/insomnia001/depts/free/users/wl3003/4ascend-model/model-v3/checkpoints/" if __IF__HPC__ else "checkpoints"
     if __IF__DEBUG__:
-        default_save_path = "/insomnia001/depts/free/users/wl3003/4ascend-model/checkpoints"
+        default_save_path = "/insomnia001/depts/free/users/wl3003/4ascend-model/model-v3/checkpoints/"
     parser.add_argument('--savePath', type=str, default=default_save_path, help='model path')
     parser.add_argument('--game', type=int, default=100, help='Number of games per epoch')
     parser.add_argument('--batch', type=int, default=2048, help='Number of batch')
@@ -268,7 +268,8 @@ if __name__ == "__main__":
         raise ValueError("trainFileChunk must be > 0.")
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print("using %s as device." % torch.cuda.get_device_name(torch.cuda.current_device()))
+    if not __IF__DEBUG__:
+        print("using %s as device." % torch.cuda.get_device_name(torch.cuda.current_device()))
     trainer = AZLiteTrainer(board_size=9, win_k=4, hp_max=6, device=device,
                             save_dir=args.savePath, save_every_sec=300,
                             num_workers=0,
