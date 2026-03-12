@@ -466,6 +466,16 @@ class Engine:
                     k += 1
                     weighted_candidates.append(
                         {
+                            "weight": ovr["weight"],
+                            "r": ovr["r"],
+                            "c": ovr["c"],
+                            "max_align": ovr["max_align"],  # [黑方0, 白方1]
+                            "max_align_total": ovr["max_align_total"],  # [黑方0, 白方1]
+                            "ovr_bits": ovr["ovr_bits"]
+                        }
+                    )
+                    weighted_candidates.append(
+                        {
                             "weight": ovr["weight"] + 40 - random.randint(0, 119),
                             "r": ovr["r"],
                             "c": ovr["c"],
