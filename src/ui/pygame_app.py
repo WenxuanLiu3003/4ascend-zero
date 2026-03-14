@@ -175,6 +175,7 @@ def _build_buttons(layout, edit_mode):
     plant_rect = pygame.Rect(x0, y0 + (btn_h + gap) * 2, btn_w, btn_h)
     run_rect = pygame.Rect(x0, y0 + (btn_h + gap) * 3, btn_w, btn_h)
     exit_edit_rect = pygame.Rect(x0, y0 + (btn_h + gap) * 4, btn_w, btn_h)
+    switch_bw_rect = pygame.Rect(x0, y0 + (btn_h + gap) * 5, btn_w, btn_h)
     back_w = max(70, int(layout["cell"] * 1.8))
     board_total_w = layout["board_span"] + layout["board_pad"] * 2
     back_x = layout["board_x0"] - layout["board_pad"] + (board_total_w - back_w) // 2
@@ -186,6 +187,7 @@ def _build_buttons(layout, edit_mode):
         "plant": plant_rect,
         "run": run_rect,
         "exit_edit": exit_edit_rect,
+        "switch_bw": switch_bw_rect,
         "back": back_rect,
         "active_black": edit_mode == "black",
         "active_white": edit_mode == "white",
@@ -243,6 +245,7 @@ def draw_board(
     run_busy: bool,
     run_msg: str,
     show_refresh_notice: bool,
+    swap_bw_display: bool,
 ):
     screen.fill(BG)
     size = state.board.size
@@ -260,7 +263,10 @@ def draw_board(
     y = ly["margin"]
 
     phase_txt = "ATTACK_DEFENSE" if state.phase == Phase.ATTACK_DEFENSE else "NORMAL"
-    turn_txt = "BLACK" if state.to_play == Player.BLACK else "WHITE"
+    if state.to_play == Player.BLACK:
+        turn_txt = "WHITE" if swap_bw_display else "BLACK"
+    else:
+        turn_txt = "BLACK" if swap_bw_display else "WHITE"
     mode_txt = f"EDIT: {edit_mode.upper()}" if edit_mode else "EDIT: OFF"
     screen.blit(
         bigfont.render(f"Phase: {phase_txt} | To Play: {turn_txt} | Turn: {state.turn} | {mode_txt}", True, BLACK),
@@ -307,7 +313,8 @@ def draw_board(
     _draw_button(screen, buttons["white"], "White", smallfont, buttons["active_white"])
     _draw_button(screen, buttons["plant"], "Plant", smallfont, buttons["active_plant"])
     _draw_button(screen, buttons["run"], "Run", smallfont, active=run_busy)
-    _draw_button(screen, buttons["exit_edit"], "Exit Edt", smallfont, active=False)
+    _draw_button(screen, buttons["exit_edit"], "Exit Edit", smallfont, active=False)
+    _draw_button(screen, buttons["switch_bw"], "Switch B&W", smallfont, active=swap_bw_display)
     _draw_button(screen, buttons["back"], "Back", smallfont, active=False)
 
     board_x0 = ly["board_x0"]
@@ -344,7 +351,10 @@ def draw_board(
                 continue
             cx = board_x0 + c * cell
             cy = board_y0 + r * cell
-            color = BLACK if v == 1 else WHITE
+            if swap_bw_display:
+                color = WHITE if v == 1 else BLACK
+            else:
+                color = BLACK if v == 1 else WHITE
             pygame.draw.circle(screen, color, (cx, cy), stone_r)
             pygame.draw.circle(screen, STONE_OUTLINE, (cx, cy), stone_r, 2)
 
@@ -402,6 +412,7 @@ def main():
     running = True
     edit_mode: str | None = None  # None | "black" | "white" | "plant"
     back_state: GameState | None = None
+    swap_bw_display = False
     run_busy = False
     run_best_rc = None
     run_best_winrate = None
@@ -420,6 +431,7 @@ def main():
                     state = GameState(cfg=cfg, board=board)
                     edit_mode = None
                     back_state = None
+                    swap_bw_display = False
                     run_best_rc = None
                     run_best_winrate = None
                     run_busy = False
@@ -462,7 +474,7 @@ def main():
                     run_msg = "Initializing MCTS..."
                     draw_board(
                         screen, state, edit_mode, run_best_rc, run_best_winrate, run_busy, run_msg,
-                        show_refresh_notice=(refresh_notice_turn == state.turn),
+                        show_refresh_notice=(refresh_notice_turn == state.turn), swap_bw_display=swap_bw_display,
                     )
                     try:
                         if mcts_runner is None:
@@ -470,7 +482,7 @@ def main():
                         run_msg = "Running MCTS..."
                         draw_board(
                             screen, state, edit_mode, run_best_rc, run_best_winrate, run_busy, run_msg,
-                            show_refresh_notice=(refresh_notice_turn == state.turn),
+                            show_refresh_notice=(refresh_notice_turn == state.turn), swap_bw_display=swap_bw_display,
                         )
                         run_best_rc, run_best_winrate = mcts_runner.best_move(state)
                         run_msg = "MCTS done" if run_best_rc is not None else "No legal move"
@@ -484,6 +496,11 @@ def main():
                     if run_busy:
                         continue
                     edit_mode = None
+                    continue
+                if buttons["switch_bw"].collidepoint(event.pos):
+                    if run_busy:
+                        continue
+                    swap_bw_display = not swap_bw_display
                     continue
                 if buttons["back"].collidepoint(event.pos):
                     if run_busy:
@@ -551,7 +568,7 @@ def main():
                             pass
         draw_board(
             screen, state, edit_mode, run_best_rc, run_best_winrate, run_busy, run_msg,
-            show_refresh_notice=(refresh_notice_turn == state.turn),
+            show_refresh_notice=(refresh_notice_turn == state.turn), swap_bw_display=swap_bw_display,
         )
         clock.tick(60)
 
