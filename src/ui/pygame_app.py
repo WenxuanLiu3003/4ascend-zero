@@ -174,12 +174,18 @@ def _build_buttons(layout, edit_mode):
     white_rect = pygame.Rect(x0, y0 + btn_h + gap, btn_w, btn_h)
     plant_rect = pygame.Rect(x0, y0 + (btn_h + gap) * 2, btn_w, btn_h)
     run_rect = pygame.Rect(x0, y0 + (btn_h + gap) * 3, btn_w, btn_h)
-    back_rect = pygame.Rect(x0, y0 + (btn_h + gap) * 4, btn_w, btn_h)
+    exit_edit_rect = pygame.Rect(x0, y0 + (btn_h + gap) * 4, btn_w, btn_h)
+    back_w = max(70, int(layout["cell"] * 1.8))
+    board_total_w = layout["board_span"] + layout["board_pad"] * 2
+    back_x = layout["board_x0"] - layout["board_pad"] + (board_total_w - back_w) // 2
+    back_y = max(layout["info_h"] + gap, layout["board_outer_y"] - btn_h - gap)
+    back_rect = pygame.Rect(back_x, back_y, back_w, btn_h)
     return {
         "black": black_rect,
         "white": white_rect,
         "plant": plant_rect,
         "run": run_rect,
+        "exit_edit": exit_edit_rect,
         "back": back_rect,
         "active_black": edit_mode == "black",
         "active_white": edit_mode == "white",
@@ -301,6 +307,7 @@ def draw_board(
     _draw_button(screen, buttons["white"], "White", smallfont, buttons["active_white"])
     _draw_button(screen, buttons["plant"], "Plant", smallfont, buttons["active_plant"])
     _draw_button(screen, buttons["run"], "Run", smallfont, active=run_busy)
+    _draw_button(screen, buttons["exit_edit"], "Exit Edt", smallfont, active=False)
     _draw_button(screen, buttons["back"], "Back", smallfont, active=False)
 
     board_x0 = ly["board_x0"]
@@ -394,6 +401,7 @@ def main():
 
     running = True
     edit_mode: str | None = None  # None | "black" | "white" | "plant"
+    back_state: GameState | None = None
     run_busy = False
     run_best_rc = None
     run_best_winrate = None
@@ -411,6 +419,7 @@ def main():
                     board = Board(cfg.board_size)
                     state = GameState(cfg=cfg, board=board)
                     edit_mode = None
+                    back_state = None
                     run_best_rc = None
                     run_best_winrate = None
                     run_busy = False
@@ -471,10 +480,21 @@ def main():
                         run_msg = f"Run failed: {exc}"
                     run_busy = False
                     continue
-                if buttons["back"].collidepoint(event.pos):
+                if buttons["exit_edit"].collidepoint(event.pos):
                     if run_busy:
                         continue
                     edit_mode = None
+                    continue
+                if buttons["back"].collidepoint(event.pos):
+                    if run_busy:
+                        continue
+                    if back_state is not None:
+                        state = back_state.copy()
+                        back_state = None
+                        run_best_rc = None
+                        run_best_winrate = None
+                        run_msg = ""
+                        refresh_notice_turn = -1
                     continue
 
                 if run_busy:
@@ -503,6 +523,7 @@ def main():
                 elif not state.is_terminal():
                     if state.board.grid[r, c] == 0:
                         try:
+                            prev_state = state.copy()
                             prev_phase = state.phase
                             prev_plants = state.board.plants.copy()
                             prev_grid = state.board.grid.copy()
@@ -522,6 +543,7 @@ def main():
                                 if prev_phase is Phase.ATTACK_DEFENSE:
                                     clear_mask = ((prev_grid > 0) | (prev_attack_mask > 0)) & (state.board.grid == 0)
                                     state.board.plants[clear_mask] = 0
+                            back_state = prev_state
                             run_best_rc = None
                             run_best_winrate = None
                             run_msg = ""
