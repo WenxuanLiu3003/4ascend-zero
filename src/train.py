@@ -250,9 +250,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="training parameters")
     parser.add_argument('--epoch', type=int, default=1, help='Number of training epochs')
     parser.add_argument('--sim', type=int, default=1600, help='Number of simulations')
-    default_save_path = "/insomnia001/depts/free/users/wl3003/4ascend-model/model-v3/checkpoints/" if __IF__HPC__ else "checkpoints"
-    if __IF__DEBUG__:
-        default_save_path = "/insomnia001/depts/free/users/wl3003/4ascend-model/model-v3/checkpoints/"
+    default_save_path = os.environ.get("ASCEND_CHECKPOINT_DIR", "checkpoints")
     parser.add_argument('--savePath', type=str, default=default_save_path, help='model path')
     parser.add_argument('--game', type=int, default=100, help='Number of games per epoch')
     parser.add_argument('--batch', type=int, default=2048, help='Number of batch')
