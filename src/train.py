@@ -34,7 +34,9 @@ class AZLiteTrainer:
                  num_workers: int = 0,
                  shaped_reward_enabled: bool = False,
                  shaped_reward_coeff: float = 0.05,
-                 reuse_tree: bool = False):
+                 reuse_tree: bool = False,
+                 policy_endgame_weight: float = 5.0,
+                 value_endgame_weight: float = 10.0):
         self.cfg = RulesConfig(board_size=board_size, win_k=win_k, hp_max=hp_max)
         self.engine = Engine(win_k=self.cfg.win_k)
         self.encoder = AlphaZeroStateEncoder(last_k=8)
@@ -44,8 +46,6 @@ class AZLiteTrainer:
         print("trainable parameters: %d" % sum(p.numel() for p in self.model.parameters() if p.requires_grad) )
         self.model.eval()
         self.opt = optim.Adam(self.model.parameters(), lr=1e-4, weight_decay=1e-4)
-        self.ce = nn.KLDivLoss(reduction='batchmean')
-        self.mse = nn.MSELoss()
 
         self.save_dir = save_dir
         self.save_every_sec = save_every_sec
@@ -59,6 +59,8 @@ class AZLiteTrainer:
 
         # 自博弈时是否启用根节点树复用（默认关）
         self.reuse_tree = bool(reuse_tree)
+        self.policy_endgame_weight = max(1.0, float(policy_endgame_weight))
+        self.value_endgame_weight = max(1.0, float(value_endgame_weight))
 
         ckpt = latest_checkpoint_path(self.save_dir)
         if ckpt is not None:
@@ -75,16 +77,16 @@ class AZLiteTrainer:
                 print(f"[train] Initial checkpoint save failed: {exc}")
 
     # —— 单进程自博弈 —— #
-    def _self_play_batch_serial(self, games=8, sims=400) -> List[Tuple[np.ndarray, np.ndarray, int, float]]:
+    def _self_play_batch_serial(self, games=8, sims=400) -> List[Tuple[np.ndarray, np.ndarray, int, float, float]]:
         sp = SelfPlay(self.model, self.encoder, self.engine, c_puct=2.5,
                       board_size=self.cfg.board_size, sims=sims, device=self.device,
                       use_tree_reuse=self.reuse_tree)
         dataset = []
         for _ in tqdm(range(games), desc="Self-play games", unit="game"):
             s = GameState(cfg=self.cfg, board=Board(self.cfg.board_size), to_play=Player.BLACK)
-            data = sp.play_one(s)  # 返回 (planes, pi, z, aux_r)
+            data = sp.play_one(s)  # 返回 (planes, pi, z, aux_r, is_endgame)
             for sample in data:
-                dataset.extend(SelfPlay.augment(sample))  # 也返回四元组
+                dataset.extend(SelfPlay.augment(sample))  # 也返回五元组
         random.shuffle(dataset)
         print("length of dataset: %d" % len(dataset))
         return dataset
@@ -101,13 +103,13 @@ class AZLiteTrainer:
         sp = SelfPlay(model, encoder, engine, board_size=cfg_dict['board_size'],
                       sims=sims, device='cpu', use_tree_reuse=reuse_tree)
         s = GameState(cfg=RulesConfig(**cfg_dict), board=Board(cfg_dict['board_size']))
-        data = sp.play_one(s)  # (planes, pi, z, aux_r)
+        data = sp.play_one(s)  # (planes, pi, z, aux_r, is_endgame)
         out = []
         for sample in data:
             out.extend(SelfPlay.augment(sample))
         return out
 
-    def self_play_batch(self, games=8, sims=400) -> List[Tuple[np.ndarray, np.ndarray, int, float]]:
+    def self_play_batch(self, games=8, sims=400) -> List[Tuple[np.ndarray, np.ndarray, int, float, float]]:
         if self.num_workers <= 0:
             return self._self_play_batch_serial(games=games, sims=sims)
 
@@ -133,20 +135,22 @@ class AZLiteTrainer:
         random.shuffle(dataset)
         return dataset
 
-    def train_step(self, batch: List[Tuple[np.ndarray, np.ndarray, int, float]]):
-        xs, target_pi, target_v, aux = [], [], [], []
-        for x, pi, z, a_r in batch:
+    def train_step(self, batch: List[Tuple[np.ndarray, np.ndarray, int, float, float]]):
+        xs, target_pi, target_v, aux, endgame_flags = [], [], [], [], []
+        for x, pi, z, a_r, is_endgame in batch:
             xs.append(x)
             target_pi.append(pi)
             target_v.append(z)
             aux.append(a_r)
+            endgame_flags.append(is_endgame)
 
-        x = torch.from_numpy(np.stack(xs)).float().to(self.device)                # [B,C,H,W]
-        pi = torch.from_numpy(np.stack(target_pi)).float().to(self.device)        # [B,81]
-        z = torch.from_numpy(np.array(target_v, dtype=np.float32)).to(self.device) # [B]
-        aux_r = torch.from_numpy(np.array(aux, dtype=np.float32)).to(self.device)  # [B]
+        x = torch.from_numpy(np.stack(xs)).float().to(self.device)                 # [B,C,H,W]
+        pi = torch.from_numpy(np.stack(target_pi)).float().to(self.device)         # [B,81]
+        z = torch.from_numpy(np.array(target_v, dtype=np.float32)).to(self.device)  # [B]
+        aux_r = torch.from_numpy(np.array(aux, dtype=np.float32)).to(self.device)   # [B]
+        is_endgame = torch.from_numpy(np.array(endgame_flags, dtype=np.float32)).to(self.device)
 
-        # 奖励塑形：z' = clip(z + λ * aux_r, -1, 1)（开关控制）
+        # reward shaping：z' = clip(z + λ * aux_r, -1, 1)（开关控制）
         if self.shaped_reward_enabled:
             z_target = torch.clamp(z + self.shaped_reward_coeff * aux_r, -1.0, 1.0)
         else:
@@ -155,9 +159,15 @@ class AZLiteTrainer:
         self.model.train()
         p_logits, v = self.model(x)  # p_logits:[B,81], v:[B]
         logp = torch.log_softmax(p_logits, dim=-1)
+        target_logp = torch.log(pi.clamp_min(1e-12))
 
-        loss_p = self.ce(logp, pi)       # 策略 KL
-        loss_v = self.mse(v, z_target)   # 价值 MSE（可选加形）
+        w_p = 1.0 + (self.policy_endgame_weight - 1.0) * is_endgame
+        w_v = 1.0 + (self.value_endgame_weight - 1.0) * is_endgame
+        loss_p_per = (pi * (target_logp - logp)).sum(dim=-1)
+        loss_v_per = (v - z_target).pow(2)
+
+        loss_p = (w_p * loss_p_per).sum() / w_p.sum().clamp_min(1e-6)
+        loss_v = (w_v * loss_v_per).sum() / w_v.sum().clamp_min(1e-6)
         loss = loss_p + loss_v
 
         self.opt.zero_grad()
@@ -210,7 +220,7 @@ def _unique_dataset_path(dataset_dir: str) -> str:
     rid = random.randint(0, 1_000_000_000)
     return os.path.join(dataset_dir, f"dataset_{stamp}_{os.getpid()}_{rid}.pt")
 
-def _save_dataset_file(dataset_dir: str, data: List[Tuple[np.ndarray, np.ndarray, int, float]]) -> str:
+def _save_dataset_file(dataset_dir: str, data: List[Tuple[np.ndarray, np.ndarray, int, float, float]]) -> str:
     path = _unique_dataset_path(dataset_dir)
     torch.save(data, path)
     return path
@@ -225,7 +235,7 @@ def _list_dataset_files(dataset_dir: str) -> List[str]:
         if os.path.isfile(os.path.join(dataset_dir, f)) and f.endswith(valid_suffixes)
     )
 
-def _load_dataset_files(file_paths: List[str]) -> List[Tuple[np.ndarray, np.ndarray, int, float]]:
+def _load_dataset_files(file_paths: List[str]) -> List[Tuple[np.ndarray, np.ndarray, int, float, float]]:
     data = []
     for path in file_paths:
         # Dataset files are produced by this codebase; allow full unpickling.
@@ -235,7 +245,7 @@ def _load_dataset_files(file_paths: List[str]) -> List[Tuple[np.ndarray, np.ndar
             print(f"[trainOnly] skipped corrupted dataset file: {path}. error={exc}")
     return data
 
-def _load_all_datasets(dataset_dir: str) -> List[Tuple[np.ndarray, np.ndarray, int, float]]:
+def _load_all_datasets(dataset_dir: str) -> List[Tuple[np.ndarray, np.ndarray, int, float, float]]:
     return _load_dataset_files(_list_dataset_files(dataset_dir))
 
 def _delete_dataset_files(dataset_dir: str) -> None:
@@ -258,6 +268,10 @@ if __name__ == "__main__":
     parser.add_argument('--trainOnly', action='store_true', help='Only train using datasets on disk')
     parser.add_argument('--trainFileChunk', type=int, default=120,
                         help='Number of dataset files loaded into RAM per trainOnly chunk')
+    parser.add_argument('--policyEndgameWeight', type=float, default=5.0,
+                        help='Policy loss weight multiplier for endgame samples')
+    parser.add_argument('--valueEndgameWeight', type=float, default=10.0,
+                        help='Value loss weight multiplier for endgame samples')
     args = parser.parse_args()
 
     if args.playOnly and args.trainOnly:
@@ -267,13 +281,18 @@ if __name__ == "__main__":
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     if not __IF__DEBUG__:
-        print("using %s as device." % torch.cuda.get_device_name(torch.cuda.current_device()))
+        if device == "cuda":
+            print("using %s as device." % torch.cuda.get_device_name(torch.cuda.current_device()))
+        else:
+            print("using cpu as device.")
     trainer = AZLiteTrainer(board_size=9, win_k=4, hp_max=6, device=device,
                             save_dir=args.savePath, save_every_sec=300,
                             num_workers=0,
                             shaped_reward_enabled=False,   # ← 打开/关闭 奖励塑形
                             shaped_reward_coeff=0.05,     # ← 微奖励系数 λ
-                            reuse_tree=False)             # ← 是否根复用（默认关闭）
+                            reuse_tree=False,             # ← 是否根复用（默认关闭）
+                            policy_endgame_weight=args.policyEndgameWeight,
+                            value_endgame_weight=args.valueEndgameWeight)
     dataset_dir = os.path.join(default_save_path, "dataset")
     ensure_dir(dataset_dir)
 

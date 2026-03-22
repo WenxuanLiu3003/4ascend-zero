@@ -35,8 +35,8 @@ class SelfPlay:
         self.use_tree_reuse = use_tree_reuse
 
     def play_one(self, init_state: GameState, temp_steps: int = 30,
-             dir_alpha: float = 0.3, dir_eps: float = 0.25) -> List[Tuple[np.ndarray, np.ndarray, int]]:
-        """返回 (state_planes, pi, z) 列表；z 从当前执手视角 ∈ {+1,-1}。
+             dir_alpha: float = 0.3, dir_eps: float = 0.25) -> List[Tuple[np.ndarray, np.ndarray, int, float, float]]:
+        """返回 (state_planes, pi, z, aux_r, is_endgame) 列表；z 从当前执手视角 ∈ {+1,-1}。
         state_planes 使用 encoder.encode(state, as_player=state.to_play)。"""
         data = []
         s = init_state
@@ -101,8 +101,9 @@ class SelfPlay:
             else:
                 opp_delta = max(0, hp_before_black - hp_after_black)
             aux_r = float(opp_delta) / max(1, s.cfg.hp_max)
+            is_endgame = float(np.count_nonzero(s.board.grid) >= 64)
 
-            data.append((planes, pi, 0, aux_r))  # z 暂存 0，赛后再填
+            data.append((planes, pi, 0, aux_r, is_endgame))  # z 暂存 0，赛后再填
             step_idx += 1
 
             if self.use_tree_reuse:
@@ -130,19 +131,19 @@ class SelfPlay:
             else:
                 loser = Player.BLACK if loser_idx == 0 else Player.WHITE
                 z = -1 if cur_player == loser else +1
-            planes, pi, _, aux_r = data[i]
-            data[i] = (planes, pi, z, aux_r)
+            planes, pi, _, aux_r, is_endgame = data[i]
+            data[i] = (planes, pi, z, aux_r, is_endgame)
             cur_player = Player.WHITE if cur_player == Player.BLACK else Player.BLACK
         return data
 
     @staticmethod
-    def augment(sample: Tuple[np.ndarray, np.ndarray, int]) -> List[Tuple[np.ndarray, np.ndarray, int]]:
-        x, pi, z, aux = sample
+    def augment(sample: Tuple[np.ndarray, np.ndarray, int, float, float]) -> List[Tuple[np.ndarray, np.ndarray, int, float, float]]:
+        x, pi, z, aux, is_endgame = sample
         H = int(np.sqrt(len(pi)))
         pi_map = pi.reshape(H, H)
         out = []
         for f in AUG_FUNCS:
             x2 = f(x.copy())
             pi2 = f(pi_map.copy()).reshape(-1)
-            out.append((x2, pi2, z, aux))
+            out.append((x2, pi2, z, aux, is_endgame))
         return out
