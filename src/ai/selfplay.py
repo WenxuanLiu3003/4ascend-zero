@@ -9,7 +9,6 @@ from ..core.state import GameState
 from ..core.encoding import AlphaZeroStateEncoder
 from .mcts import MCTS
 
-# 8种对称增强
 AUG_FUNCS = [
     lambda x: x,                               # id
     lambda x: np.rot90(x, 1, axes=(-2, -1)),  # rot90
@@ -36,8 +35,13 @@ class SelfPlay:
 
     def play_one(self, init_state: GameState, temp_steps: int = 30,
              dir_alpha: float = 0.3, dir_eps: float = 0.25) -> List[Tuple[np.ndarray, np.ndarray, int, float, float]]:
-        """返回 (state_planes, pi, z, aux_r, is_endgame) 列表；z 从当前执手视角 ∈ {+1,-1}。
-        state_planes 使用 encoder.encode(state, as_player=state.to_play)。"""
+        """
+        play one game and collect training data. Returns a list of (planes, pi, z, aux_r, is_endgame) for each step in the game, where:
+        - planes: the encoded game state as input to the model (C, H, W)
+        - pi: the MCTS visit count distribution over actions (H*W,)
+        - z: the game result from the perspective of the current player at that step (+1 win, -1 lose, 0 draw)
+        - is_endgame: whether the game is in the endgame phase (after 64 moves) for that step
+        """
         data = []
         s = init_state
         mcts = MCTS(self.model, self.encoder, self.engine, self.size, self.c_puct, self.sims,
@@ -58,24 +62,20 @@ class SelfPlay:
 
             planes = self.encoder.encode(s, as_player=s.to_play)  # [C,H,W]
 
-            # —— 额外安全：用“当前真实棋盘”的合法掩码再次过滤 π —— #
             legal_mask = (s.board.grid == 0).astype(np.float32).reshape(-1)
             pi = pi * legal_mask
             ssum = pi.sum()
             if ssum <= 1e-8:
-                # 极端：无合法动作
                 print("[Warning] MCTS output near-zero probability sum.")
                 print("psum = %.20f" % ssum)
                 # break
             pi /= ssum
 
-            # 温度控制（采样/贪心）
             if step_idx < temp_steps:
                 a = np.random.choice(self.size * self.size, p=pi)
             else:
                 a = int(np.argmax(pi))
 
-            # 再次防御式检查：若因数值误差导致选择到非法点，则回退为合法 argmax
             r, c = divmod(a, self.size)
             if s.board.grid[r, c] != 0:
                 legal_indices = np.where(legal_mask > 0)[0]
@@ -84,17 +84,16 @@ class SelfPlay:
                 a = int(legal_indices[np.argmax(pi[legal_indices])])
                 r, c = divmod(a, self.size)
                 if s.board.grid[r, c] != 0:
-                    # 仍非空，放弃该局（极少数保护分支）
                     break
 
-            # —— 计算“扣血微奖励” aux_r ——
+            # computing aux_r
             hp_before_black, hp_before_white = int(s.hp[0]), int(s.hp[1])
             to_play = s.to_play # 当前执手
 
-            # 真正落子
+            # place the stone
             s = self.engine.step(s, Move(r, c))
 
-            # HP 变化（对手被扣血的量；归一化到 [0,1]）
+            # HP change
             hp_after_black, hp_after_white = int(s.hp[0]), int(s.hp[1])
             if to_play is Player.BLACK:
                 opp_delta = max(0, hp_before_white - hp_after_white)
@@ -103,13 +102,13 @@ class SelfPlay:
             aux_r = float(opp_delta) / max(1, s.cfg.hp_max)
             is_endgame = float(np.count_nonzero(s.board.grid) >= 64)
 
-            data.append((planes, pi, 0, aux_r, is_endgame))  # z 暂存 0，赛后再填
+            data.append((planes, pi, 0, aux_r, is_endgame))  # z is temporarily set to 0, will be filled in after the game ends
             step_idx += 1
 
             if self.use_tree_reuse:
                 prev_root, last_action = root, a
 
-        # 终局 z：胜方为 +1，负方为 -1（从各自落子时的视角）
+        # assign value when the game ends
         if (s.hp <= 0).any():
             loser_idx = 0 if s.hp[0] <= 0 else 1
         else:

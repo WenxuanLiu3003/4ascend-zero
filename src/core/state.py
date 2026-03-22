@@ -16,20 +16,20 @@ class GameState:
     turn: int = 0
     phase: Phase = Phase.NORMAL
 
-    # 历史落点（用于 AZ-lite 的“历史 k 步落点叠图”）
+    # historical last k moves for plane encoding
     last_moves: List[Optional[Move]] = field(default_factory=list)
     last_k_for_planes: int = 4
 
-    # HP（示例：每回合或结算时可变化）
+    # HP status
     hp: np.ndarray = field(default_factory=lambda: np.array([RulesConfig.hp_max, RulesConfig.hp_max], dtype=np.int32))
 
-    # 攻防状态的临时数据（在 ATTACK_DEFENSE 时有效）
+    # recoding the attackers attacking chain
     attack_chain_mask: Optional[np.ndarray] = None  # 攻方“可被无效化”的连子位置掩码（H×W，bool）
 
-    # 记录最近一次落点（冗余但方便）
+    # the last move
     last_move: Optional[Move] = None
 
-    # 植物刷新相关状态
+    # the state variables used for refreshing the plant
     over_fill: bool = False
     just_unascend: bool = False
     grow_count: int = 11
@@ -55,20 +55,19 @@ class GameState:
             Aunascend_charge_fast=self.Aunascend_charge_fast.copy(),
         )
     
-    # 基础查询与终局
+    # whether the game has ended
     def is_terminal(self) -> bool:
-        # 1) 任一方 HP 归零
+        # 1) someone's HP is 0 or below
         if (self.hp <= 0).any():
             return True
-        # 2) 达到最大步数
+        # 2) reaches the maximum turn limit
         if self.turn >= self.cfg.max_turns:
             return True
-        # 3) 棋盘已满且不在攻防阶段
+        # 3) board  is fully filled
         if self.phase == Phase.NORMAL and not np.any(self.board.grid == 0):
             return True
         return False
 
     def legal_moves(self) -> List[Move]:
-        # 普通落子：所有空位
         empties = np.argwhere(self.board.grid == 0)
         return [Move(int(r), int(c)) for r, c in empties]

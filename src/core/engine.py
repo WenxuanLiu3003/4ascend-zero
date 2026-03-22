@@ -1,11 +1,6 @@
 # ──────────────────────────────────────────────────────────────────────────────
-# File: src/core/engine.py （移除 AttackContext；不使用 ns.ad_ctx；按 a,b,c,d 规则结算伤害）
-# 说明：
-#   - 攻防结算：a=攻方有效stone，b=攻方有效plant，c=防守方有效stone，d=防守方有效plant，
-#     伤害 = |(a+b) - (c+d)|
-#   - a/b 的“被占据扣减”仅需检查“防守方当前 move 是否占据攻方 chain 中的某一格”，若是则各减 1。
-#   - 攻防结束后清除参与格子的植物，并强制刷新植物。
-#   - 默认每 10 手常规刷新 2 个植物（空位且计数<2）。
+# File: src/core/engine.py 
+# The game engine: the step function that takes a state and a move, and returns the next state after applying the game rules.
 # ──────────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 from typing import Set, Tuple, Iterable
@@ -16,12 +11,11 @@ from .types import Player, Move, Phase
 from .state import GameState
 from .board import Board
 
-# 四个方向：水平/垂直/两对角
 _DIRS = [(0,1),(1,0),(1,1),(1,-1)]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 基础工具
+# basic tools
 # ──────────────────────────────────────────────────────────────────────────────
 def _in_bounds(size: int, r: int, c: int) -> bool:
     return 0 <= r < size and 0 <= c < size
@@ -35,47 +29,50 @@ def zsin(x: float, period: float) -> float:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 引擎主体
+# game engine
 # ──────────────────────────────────────────────────────────────────────────────
 class Engine:
     def __init__(self, win_k: int = 4):
-        self.win_k = win_k
+        self.win_k = win_k  # do not change since 4ASCEND is designed around 4-in-a-row mechanics
 
     def step(self, s: GameState, move: Move) -> GameState:
         """
-        推进一步并处理阶段切换/结算：
-          - NORMAL：当前方落子；若触发四连 → 进入 ATTACK_DEFENSE（设置 attack_chain_mask 并移除攻方链棋子）；
-                    否则轮转执手并按周期刷新植物。
-          - ATTACK_DEFENSE：防守方落子 → 依据 a,b,c,d 规则结算 → 清除参与植物 → 回到 NORMAL 并强制刷新植物。
+        step the status s by applying move, return the next status.
         """
         ns = s.copy()
         # record board state
         ns.last_moves.append(ns.board.grid.copy())
 
         if ns.phase is Phase.NORMAL:
-            # 当前执手下子
+            """
+            When the current phase is NORMAL, the current player simply places a stone. 
+            If this creates a >=win_k chain, those stones are removed and the game transitions to ATTACK_DEFENSE with the opponent as the defender; 
+            otherwise, it just switches to the opponent and potentially refreshes plants below.
+            """
+
+            # the current player places a stone
             self._place_stone_or_raise(ns, move, ns.to_play)
             ns.last_move = move
             # ns.last_moves.append(move)
 
-            # 计算以该落点为锚的所有四连（去重合集）
+            # calculate the attack chain (if any) triggered by this move: collect all >=win_k chains of the current player that include the move
             atk_cells = self._collect_four_chains(ns.board, move, player_id=self._pid(ns.to_play))
 
             if atk_cells:
-                # 进入ascend：先把攻方链上的棋子从棋盘上移除（按规则）
+                # enter ATTACK_DEFENSE phase: remove the attack chain stones from the board (but keep the plant counts, which will be used for damage calculation)
                 self._remove_stones(ns.board, atk_cells)
 
-                # 用 mask 表达攻方链（供 UI/编码/结算使用）
+                # establish the attack chain mask for the defense phase (to be used for damage calculation and observation encoding)
                 mask = np.zeros_like(ns.board.grid, dtype=np.uint8)
                 for (r, c) in atk_cells:
                     mask[r, c] = 1
                 ns.attack_chain_mask = mask
 
-                # 阶段切换到 ascend，轮到防守方应手
+                # transition to ATTACK_DEFENSE phase; the opponent becomes the defender
                 ns.phase = Phase.ATTACK_DEFENSE
                 ns.to_play = _other(ns.to_play)
             else:
-                # 未触发攻防：正常轮转并按周期刷新
+                # If there is no ASCEND trigger, simply switch the player and potentially refresh plants below.
                 ns.to_play = _other(ns.to_play)
                 ns.just_unascend = False
 
@@ -87,43 +84,47 @@ class Engine:
                     ns.Aunascend_charge_fast[index] -= 1
 
         elif ns.phase is Phase.ATTACK_DEFENSE:
-            # 记录本手的防守方（当前执手）
+            """
+            When the current phase is ATTACK_DEFENSE, the current player is the defender who just placed a stone to defend against the opponent's attack chain.
+            """
             defender = ns.to_play
 
-            # 防守方下子
+            # the defender places a stone
             self._place_stone_or_raise(ns, move, defender)
             ns.last_move = move
             # ns.last_moves.append(move)
 
-            # 以防守方落点为锚，收集防守方四连（可能为空）
+            # collect the 4-in-a-row chains of the defender that include the defense move (if any), 
+            # which will be used for damage calculation. 
+            # Note that these chains may overlap with the attack chain, which will be handled in the damage calculation logic.
             def_cells = self._collect_four_chains(ns.board, move, player_id=self._pid(defender))
 
-            # 如果防守方存在四连，则清除防守方棋子
+            # If the defender also creates >=win_k chains, those stones are removed before damage calculation
             if def_cells:
                 self._remove_stones(ns.board, def_cells)
 
-            # 由 attack_chain_mask 还原攻方链坐标集合（避免维护额外上下文）
             atk_cells = self._cells_from_mask(ns.attack_chain_mask)
-            # 如果防守方没有选择ascend, 也有可能占据进攻方棋子，这时需要从atk_cells里面扣除
+            # If the defender fails to create any >=win_k chain, 
+            # they may also occupy the attacker's chain cells with their defense move, which deletes the occupied attack chain cell from the attacker's effective attack cells.;
             if not def_cells:
                 atk_cells.discard(move.to_tuple())
 
-            # 进行 a,b,c,d 伤害结算并更新 HP
+            # computing the damage
             self._resolve_attack_defense(ns, defender, move, atk_cells, def_cells)
 
-            # 清除参与攻防的植物（攻/防链并集）
+            # eliminate all plants that participate in the attack/defense (i.e. those in atk_cells or def_cells)
             if def_cells:
                 cells = set().union(atk_cells, def_cells)
                 for (r, c) in cells:
                     ns.board.plants[r, c] = 0
             else:
-                # 防守方未触发ascend, 则仅消除攻击方的植物，但防守方此次move占据的攻击方植物不消除
+                # Note that if the defender fails to create any >=win_k chain, they can only occupy at most one attack chain cell (since one move), so DO NOT clear the plants in that cell.
                 for (r, c) in atk_cells:
                     if (r, c) == move.to_tuple():
                         continue
                     ns.board.plants[r, c] = 0
 
-            # 回到 NORMAL；清 mask；轮到进攻方对手（即当前 defender 的对手）
+            # the status return to NORMAL phase, and the defender becomes the next attacker
             ns.phase = Phase.NORMAL
             ns.attack_chain_mask = None
             ns.to_play = _other(defender)
@@ -131,13 +132,12 @@ class Engine:
         else:
             raise RuntimeError(f"未知阶段: {ns.phase}")
         
-        # 计入一手
         ns.turn += 1
 
-        # 刷新植物
+        # plant refreshing
         ns.grow_count -= 1
-        if not ns.phase == Phase.ATTACK_DEFENSE:  # 刚进行ascend不刷草
-            if ns.grow_count <= 0 or (s.phase == Phase.ATTACK_DEFENSE and not ns.just_unascend):
+        if not ns.phase == Phase.ATTACK_DEFENSE:  # If we just enter the attack phase, do not create any plant
+            if ns.grow_count <= 0 or (s.phase == Phase.ATTACK_DEFENSE and not ns.just_unascend):  # create plant only when grow_count runs out, or (leaving the ascend phase and we are not in a continuous ascending)
                 ns.grow_count = max(7, int(11 - int(ns.turn / 22) * 2))
                 stone_count = np.sum(ns.board.grid > 0)
                 if stone_count >= 44:
@@ -163,21 +163,12 @@ class Engine:
 
         return ns
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # NORMAL 阶段辅助
-    # ──────────────────────────────────────────────────────────────────────────
     def _place_stone_or_raise(self, s: GameState, move: Move, who: Player) -> None:
         r, c = move.r, move.c
         assert s.board.is_empty(r, c), "cell not empty"
         s.board.place_stone(r, c, self._pid(who))
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # 四连收集 / 棋子移除
-    # ──────────────────────────────────────────────────────────────────────────
     def _collect_four_chains(self, board: Board, last_move: Move, player_id: int) -> Set[Tuple[int,int]]:
-        """
-        以 last_move 为锚，按四个方向收集连续同色段，长度>=win_k 的都纳入合集（支持“同时多条四连”）。
-        """
         size = board.size
         r0, c0 = last_move.r, last_move.c
         all_cells: Set[Tuple[int,int]] = set()
@@ -202,7 +193,6 @@ class Engine:
         return all_cells
 
     def _remove_stones(self, board: Board, cells: Iterable[Tuple[int,int]]) -> None:
-        """把给定集合中的棋子从棋盘上消去（不影响植物计数）。"""
         for (r, c) in cells:
             board.grid[r, c] = 0
 
@@ -224,11 +214,7 @@ class Engine:
         def_cells: Set[Tuple[int,int]],
     ) -> None:
         """
-        使用 power 消除规则结算伤害：
-          - 每个参与格子的 power = plants[r, c] + 1
-          - 若 atk/def 有重合格子，视为防守方占据攻方格子：先从 atk_cells 中移除重合格子
-          - 循环比较双方最大 power，较大方用该 power 按从大到小消除对方 <=P 的项
-          - 一方 power 列表为空时停止，另一方剩余项个数即对对手伤害
+        Use the array-algorithm to resolve the damage of the attack and defense, and update the HP in the status accordingly.
         """
         board = s.board
         attacker = defender.other()
@@ -282,7 +268,8 @@ class Engine:
             damage = len(def_power)
             s.hp[attacker.value] = max(0, s.hp[attacker.value] - damage)
 
-        # 旧版简化伤害逻辑（保留，不删除）
+        # old version of damage calculation
+        
         # size = board.size
         # occupied_attk = (defense_move.r, defense_move.c) in atk_cells
         # occupy_penalty = 1 if occupied_attk else 0
@@ -315,9 +302,7 @@ class Engine:
         #         damage = (c + d) - (a + b)
         #         s.hp[attacker.value] = max(0, s.hp[attacker.value] - damage)
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # 植物清除 / 刷新
-    # ──────────────────────────────────────────────────────────────────────────
+
     def _calc_align_stats_for_candidate(
         self, board: Board, r0: int, c0: int, stone_id: int
     ) -> Tuple[int, int]:
@@ -346,11 +331,7 @@ class Engine:
 
     def _refresh_plants(self, s: GameState, flower_num: int, just_ascend: bool) -> None:
         """
-        刷新植物：
-          - 候选点：所有空位；
-          - 对每个候选点，计算黑方(0)/白方(1)的 max_align 与 max_align_total；
-          - 每个候选点初始权重 500，并叠加均匀随机整数 [0, 20]；
-          - 按权重从高到低取前 flower_num 个点，各 +1（封顶 2）。
+        refreshing the plants
         """
         board = s.board
         size = board.size
@@ -380,8 +361,8 @@ class Engine:
             white_max_align, white_max_align_total = self._calc_align_stats_for_candidate(
                 board, r, c, stone_id=2
             )
-            # 刷草位置逻辑
-            max_align = [black_max_align, white_max_align]  # [黑方0, 白方1]
+            # determine the place to refresh the plants
+            max_align = [black_max_align, white_max_align]  # black: 0, white: 1
             _ovr_bits = [0, 0]
             weight = 500 + random.randint(0, 20)
             flag5 = False
@@ -399,7 +380,7 @@ class Engine:
                     weight -= 450
 
             if just_ascend:
-                max_align_total = [black_max_align_total, white_max_align_total]  # [黑方0, 白方1]
+                max_align_total = [black_max_align_total, white_max_align_total]  # black: 0, white: 1
                 if max_align_total[attacker_idx] > max_align_total[defender_idx]:
                     weight += (max_align_total[attacker_idx] - max_align_total[defender_idx]) * 3
                 if max_align[attacker_idx] > max_align[defender_idx]:
@@ -410,11 +391,11 @@ class Engine:
                     else:
                         weight += int(zsin(25 - s.unascend_charge, 25.0) * 120.0)
             else:   
-                pass  # TODO: 这里有一段weight更新逻辑没有实现，对应源代码TTRPlant.cs的第229-236行
+                pass  # TODO: there is a branch in the original logic that has no implementation, corresponding to TTRPlant.cs line 227-228
             if board.plants[r, c] > 0 and not flag4:
                 weight -= 30
             elif True:
-                pass  # TODO: 这里有一段更新逻辑没有实现，对应源代码TTRPlant.cs第239-240行
+                pass  # TODO: athere is a branch in the original logic that has no implementation, corresponding to TTRPlant.cs line 230-231
 
             if _ovr_bits[0] or _ovr_bits[1]:
                 ovr_buff.append(
@@ -423,8 +404,8 @@ class Engine:
                         "r": r,
                         "c": c,
                         "ovr_bits": _ovr_bits,
-                        "max_align_total": [black_max_align_total, white_max_align_total],  # [黑方0, 白方1]
-                        "max_align": [black_max_align, white_max_align],  # [黑方0, 白方1]
+                        "max_align_total": [black_max_align_total, white_max_align_total],  # black: 0, white: 1
+                        "max_align": [black_max_align, white_max_align],  # black: 0, white: 1
                     }
                 )
                 num1[0] = max(num1[0], _ovr_bits[0])
@@ -435,8 +416,8 @@ class Engine:
                         "weight": weight,
                         "r": r,
                         "c": c,
-                        "max_align": [black_max_align, white_max_align],  # [黑方0, 白方1]
-                        "max_align_total": [black_max_align_total, white_max_align_total],  # [黑方0, 白方1]
+                        "max_align": [black_max_align, white_max_align],  # black: 0, white: 1
+                        "max_align_total": [black_max_align_total, white_max_align_total],  # black: 0, white: 1
                         "ovr_bits": [0, 0]
                     }
                 )
@@ -447,8 +428,8 @@ class Engine:
                             "weight": weight + 30 - random.randint(0, 89),
                             "r": r,
                             "c": c,
-                            "max_align": [black_max_align, white_max_align],  # [黑方0, 白方1]
-                            "max_align_total": [black_max_align_total, white_max_align_total],  # [黑方0, 白方1]
+                            "max_align": [black_max_align, white_max_align],  # black: 0, white: 1
+                            "max_align_total": [black_max_align_total, white_max_align_total],  # black: 0, white: 1
                             "ovr_bits": [0, 0]
                         }
                     )
@@ -469,8 +450,8 @@ class Engine:
                             "weight": ovr["weight"],
                             "r": ovr["r"],
                             "c": ovr["c"],
-                            "max_align": ovr["max_align"],  # [黑方0, 白方1]
-                            "max_align_total": ovr["max_align_total"],  # [黑方0, 白方1]
+                            "max_align": ovr["max_align"],  # black: 0, white: 1
+                            "max_align_total": ovr["max_align_total"],  # black: 0, white: 1
                             "ovr_bits": ovr["ovr_bits"]
                         }
                     )
@@ -479,8 +460,8 @@ class Engine:
                             "weight": ovr["weight"] + 40 - random.randint(0, 119),
                             "r": ovr["r"],
                             "c": ovr["c"],
-                            "max_align": ovr["max_align"],  # [黑方0, 白方1]
-                            "max_align_total": ovr["max_align_total"],  # [黑方0, 白方1]
+                            "max_align": ovr["max_align"],  # black: 0, white: 1
+                            "max_align_total": ovr["max_align_total"],  # black: 0, white: 1
                             "ovr_bits": ovr["ovr_bits"]
                         }
                     )
@@ -506,9 +487,5 @@ class Engine:
                 s.Aunascend_charge_fast[other_idx] = max(s.Aunascend_charge_fast[other_idx], 4)
 
 
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # 杂项
-    # ──────────────────────────────────────────────────────────────────────────
     def _pid(self, p: Player) -> int:
         return 1 if p is Player.BLACK else 2

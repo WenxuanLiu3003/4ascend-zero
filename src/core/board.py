@@ -10,14 +10,13 @@ from typing import Optional, List, Tuple
 @dataclass
 class Board:
     size: int
-    # 0=空, 1=Black, 2=White
+    # 0=empty, 1=Black, 2=White
     grid: np.ndarray = field(init=False)
-    # 植物数量：≥0 的整数（允许一个格子≥2 个魔力植物）
+    # plants[r, c] counts the number of plants on cell (r, c); can be 0 or more.
     plants: np.ndarray = field(init=False)
 
     def __post_init__(self):
         self.grid = np.zeros((self.size, self.size), dtype=np.uint8)
-        # 使用无符号整型计数器，便于累加/扣减
         self.plants = np.zeros((self.size, self.size), dtype=np.uint16)
 
     def in_bounds(self, r: int, c: int) -> bool:
@@ -32,7 +31,6 @@ class Board:
         assert self.is_empty(r, c), "cell not empty"
         self.grid[r, c] = player
 
-    # —— 植物相关 ——
     def add_plants(self, r: int, c: int, count: int = 1) -> None:
         assert self.in_bounds(r, c)
         assert count >= 0

@@ -5,3 +5,4 @@
 *.out
 *.sh
 adjustData.py
+adjust_model.py

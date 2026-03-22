@@ -7,8 +7,8 @@ from typing import Optional, Tuple, List
 
 
 class Player(Enum):
-    BLACK = 0 # 先手
-    WHITE = 1 # 后手
+    BLACK = 0 # the first to place the stone
+    WHITE = 1
 
 
     def other(self) -> "Player":
@@ -18,8 +18,8 @@ class Player(Enum):
 
 
 class Phase(Enum):
-    NORMAL = auto() # 普通落子阶段
-    ATTACK_DEFENSE = auto() # 进入“攻防状态”的结算阶段
+    NORMAL = auto()
+    ATTACK_DEFENSE = auto()
 
 
 
@@ -28,7 +28,6 @@ class Phase(Enum):
 class Move:
     r: int
     c: int
-    # 如需扩展（技能、种植等），可在此加入字段或改为 Union 类型
 
 
     def to_tuple(self) -> Tuple[int, int]:

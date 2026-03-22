@@ -1,10 +1,6 @@
 # ──────────────────────────────────────────────────────────────────────────────
 # File: src/ai/mcts.py
-# 说明：
-#   - 轻量 AlphaZero 风格 MCTS，支持“根节点树复用”（可开关）。
-#   - 仅在根注入 Dirichlet 噪声增强探索。
-#   - 与现有引擎/编码保持解耦：通过 Engine.step & Encoder.encode 前进/评估。
-#   - 返回：π（按访问计数归一化）与 root（供可选复用）。
+# The MCTS implementation for 4ascend-zero
 # ──────────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 from dataclasses import dataclass
@@ -19,15 +15,15 @@ from ..core.encoding import AlphaZeroStateEncoder
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 结点定义（仅保存搜索需要的统计量）
+# Node definition
 # ──────────────────────────────────────────────────────────────────────────────
 @dataclass
 class Node:
-    prior: float                    # 先验概率 P(a|s)
-    to_play: Player                 # 该结点局面下的执手（用于价值符号翻转）
-    N: int = 0                      # 访问次数
-    W: float = 0.0                  # 累计价值（从当前结点视角）
-    Q: float = 0.0                  # 平均价值 W/N
+    prior: float                    # P(a|s)
+    to_play: Player                 # the player who takes action at this node
+    N: int = 0                      # visit counts
+    W: float = 0.0                  # cumulative value
+    Q: float = 0.0                  # average value W/N
     children: Dict[int, "Node"] = None
     is_expanded: bool = False
 
@@ -41,7 +37,7 @@ def _other(p: Player) -> Player:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# MCTS 主体
+# MCTS
 # ──────────────────────────────────────────────────────────────────────────────
 class MCTS:
     def __init__(self,
@@ -56,20 +52,19 @@ class MCTS:
                  device: str = "cpu",
                  reuse_tree: bool = False):
         """
-        参数：
-          - model: 策略-价值网络（forward: x->[p_logits, v]）
-          - encoder: AlphaZeroStateEncoder（把 GameState 编到张量）
-          - engine: 规则引擎（step/状态推进）
-          - board_size: 棋盘边长（动作空间=board_size^2）
-          - c_puct: PUCT 探索常数
-          - sims: 每步模拟次数
-          - dirichlet_alpha/eps: 根噪声参数
-          - device: 推理设备
-          - reuse_tree: 是否启用“根节点树复用”（上一手选中子节点→下一手的根）
-                        注：你的规则含“植物随机刷新”，开启可能有轻微偏差，请按需使用。
+        parameters:
+          - model: the policy-value network for evaluation
+          - encoder: AlphaZeroStateEncoder that encodes GameState to inputs for the model
+          - engine: rule engine to step the GameState
+          - board_size: 
+          - c_puct: hyperparameter controlling the exploration strength in UCT formula
+          - sims: the number of simulations to run for each move
+          - dirichlet_alpha/eps: hyperparameters controlling the Dirichlet noise to the root node to encourage exploration
+          - device: CPU or GPU for model inference
+          - reuse_tree: whether to reuse the search tree across moves (default False since the plant refreshing is random)
         """
         self.model = model
-        self.model.eval()  # 推理模式（关闭 dropout/bn 训练行为）
+        self.model.eval()
         self.encoder = encoder
         self.engine = engine
         self.size = board_size
@@ -80,9 +75,6 @@ class MCTS:
         self.device = device
         self.reuse_tree = reuse_tree
 
-    # ----------------------------------------------------------------------
-    # 基础：动作索引 & 合法掩码
-    # ----------------------------------------------------------------------
     def _legal_mask(self, s: GameState) -> np.ndarray:
         """
         返回一维合法掩码（H*W）。当前规则：空位可落（无论 NORMAL / ATTACK_DEFENSE），
@@ -91,7 +83,7 @@ class MCTS:
         return (s.board.grid == 0).astype(np.float32).reshape(-1)
 
     # ----------------------------------------------------------------------
-    # 网络评估（softmax 后的策略 & 标量价值），自动应用合法掩码并归一化
+    # use model to evaluate the policy and value for a given state from as_player's perspective
     # ----------------------------------------------------------------------
     def _policy_value(self, s: GameState, as_player: Player) -> Tuple[np.ndarray, float]:
         with torch.inference_mode():  # 比 no_grad 更彻底禁用 autograd
@@ -112,8 +104,7 @@ class MCTS:
         return p, v
 
     # ----------------------------------------------------------------------
-    # 入口：执行 sims 次模拟；返回 π（按访问次数归一化）与根
-    # 可选：当 reuse_tree=True 且提供 prev_root/last_action 时复用其子为新根
+    # Run the MCTS Algorithm and return the final policy π and the root node
     # ----------------------------------------------------------------------
     def run(self, root_state: GameState,
             prev_root: Optional[Node] = None,
@@ -122,30 +113,27 @@ class MCTS:
             turn_related_sim_coef: Optional[int] = 0.5) -> Tuple[np.ndarray, Node]:
         root_player = root_state.to_play
 
-        # —— 根构建（可选复用）——
         if self.reuse_tree and (prev_root is not None) and (last_action is not None) and (last_action in prev_root.children):
-            # 复用上一手选中动作对应的子节点作为新根
             root = prev_root.children[last_action]
         else:
-            # 新建根并按网络策略扩展一次
+            # by default, we do not use tree reusing, and we set a new root for each move
             root = Node(prior=1.0, to_play=root_player)
             p, v = self._policy_value(root_state, as_player=root_player)
             self._expand(root, root_state, p)
 
-        # —— 根注入 Dirichlet 噪声（鼓励探索）——
+        # add Dirichlet noise to the root node's priors to encourage exploration (only for the first move in self-play)
         noise = np.random.dirichlet([self.dir_alpha] * (self.size * self.size))
         for a, child in root.children.items():
-            # child.prior ← (1-ε)·prior + ε·noise
             child.prior = (1 - self.dir_eps) * child.prior + self.dir_eps * float(noise[a])
 
-        # —— 执行多次模拟 —— 
+        # Simulations
         num_sim = self.sims
         if turn_related_sim > 0 and root_state.turn >= turn_related_sim:
             num_sim = int(self.sims * turn_related_sim_coef)
         for _ in range(num_sim):
             self._simulate(root_state, root)
 
-        # —— 访问频次 → π —— 
+        # return the policy as the frequency in proportional to visit counts N.
         pi = np.zeros(self.size * self.size, dtype=np.float32)
         for a, child in root.children.items():
             pi[a] = child.N
@@ -154,39 +142,37 @@ class MCTS:
         return pi, root
 
     # ----------------------------------------------------------------------
-    # 单次模拟：选择 → 前进 → 评估/扩展 → 回传
+    # Single simulation
     # ----------------------------------------------------------------------
     def _simulate(self, state: GameState, node: Node):
-        path = []          # 记录 (node, action) 路径用于回传
+        path = []          # the exploration path along the tree
         s = state
         n = node
 
-        # 1) Selection：沿着 argmax(Q + U) 走到叶子
+        # 1) Selection：select actions according to UCT until reaching a leaf node (unexpanded or terminal)
         while n.is_expanded and len(n.children) > 0:
             a, n_next = self._select_child(n)
             path.append((n, a))
             r, c = divmod(a, self.size)
-            s = self.engine.step(s, Move(r, c))  # 基于引擎推进到后继局面
+            s = self.engine.step(s, Move(r, c)) 
             n = n_next
             if s.is_terminal():
                 break
 
-        # 2) Evaluation/Expansion：未终局则网络评估并创建子节点；终局则设 v
+        # 2) Evaluation/Expansion：if not terminal, evaluate the leaf node with the model and expand it; if terminal, directly use the game result as the value
         if not s.is_terminal():
             p, v = self._policy_value(s, as_player=s.to_play)
             self._expand(n, s, p)
         else:
-            # 简单的终局价值：从当前结点视角，胜=+1/负=-1/和=0
+            # If terminal, determine the winner and assign value v from the perspective of the current player
             loser_idx = -1
             if (s.hp <= 0).any():
-                # hp<=0 的一方为败者
                 loser_idx = 0 if s.hp[0] <= 0 else 1
             elif s.hp[0] < s.hp[1]:
                 loser_idx = 0
             elif s.hp[1] < s.hp[0]:
                 loser_idx = 1
             else:
-                # HP 相等时，用场上棋子数决胜（黑子=1，白子=2）
                 black_cnt = int(np.sum(s.board.grid == 1))
                 white_cnt = int(np.sum(s.board.grid == 2))
                 if black_cnt > white_cnt:
@@ -203,11 +189,11 @@ class MCTS:
             else:
                 v = 0.0
 
-        # 3) Backup：沿路径回传，逐层交替取反（对手视角）
+        # 3) Backup the value along the path, flipping the sign for the opponent's perspective
         self._backup(path, -v)
 
     # ----------------------------------------------------------------------
-    # 在叶子按网络先验扩展所有合法子
+    # when reaching the leaf node, expand it by adding child nodes for all legal actions, and set their priors according to the model's policy output
     # ----------------------------------------------------------------------
     def _expand(self, node: Node, state: GameState, prior_probs: np.ndarray):
         node.is_expanded = True
@@ -217,7 +203,7 @@ class MCTS:
             node.children[a] = Node(prior=float(prior_probs[a]), to_play=_other(state.to_play))
 
     # ----------------------------------------------------------------------
-    # 选择子节点：PUCT = Q + c_puct * P * sqrt(sumN) / (1+N)
+    # Criterion to select action: Q + c_puct * P * sqrt(sumN) / (1+N)
     # ----------------------------------------------------------------------
     def _select_child(self, node: Node) -> Tuple[int, Node]:
         sumN = max(1, sum(child.N for child in node.children.values()))
@@ -230,7 +216,7 @@ class MCTS:
         return best[1], best[2]
 
     # ----------------------------------------------------------------------
-    # 回传：沿路径更新 N/W/Q；下一层从对手视角认为价值取负
+    # backup the value along the path, flipping the sign for the opponent's perspective
     # ----------------------------------------------------------------------
     def _backup(self, path, value: float):
         v = value

@@ -28,6 +28,11 @@ from .utils.checkpoint import (
 __IF__HPC__ = "SLURM_JOB_ID" in os.environ
 __IF__DEBUG__ = sys.gettrace() is not None
 
+"""
+Script for training the AlphaZero-like model. It performs self-play to generate training data, then trains the model on that data. By default, it runs for a specified number of epochs, with a certain number of self-play games per epoch.
+Usage: python -m src.train --epoch 1 --game 100 --sim 1600 --batch 2048
+"""
+
 class AZLiteTrainer:
     def __init__(self, board_size=9, win_k=4, hp_max=6, device="cpu",
                  save_dir: str = "checkpoints", save_every_sec: int = 300,
@@ -53,11 +58,11 @@ class AZLiteTrainer:
         self.global_step = 0
         self.num_workers = max(0, int(num_workers))
 
-        # 奖励塑形开关与系数
+        # reward shaping, default off; if on, z_target = clip(z + λ * aux_r, -1, 1)
         self.shaped_reward_enabled = bool(shaped_reward_enabled)
         self.shaped_reward_coeff = float(shaped_reward_coeff)
 
-        # 自博弈时是否启用根节点树复用（默认关）
+        # When selfplaying, whether to reuse the search tree from the previous move (default: False).
         self.reuse_tree = bool(reuse_tree)
         self.policy_endgame_weight = max(1.0, float(policy_endgame_weight))
         self.value_endgame_weight = max(1.0, float(value_endgame_weight))
@@ -76,7 +81,7 @@ class AZLiteTrainer:
             except Exception as exc:
                 print(f"[train] Initial checkpoint save failed: {exc}")
 
-    # —— 单进程自博弈 —— #
+    # single-process self-play (default)
     def _self_play_batch_serial(self, games=8, sims=400) -> List[Tuple[np.ndarray, np.ndarray, int, float, float]]:
         sp = SelfPlay(self.model, self.encoder, self.engine, c_puct=2.5,
                       board_size=self.cfg.board_size, sims=sims, device=self.device,
@@ -91,7 +96,7 @@ class AZLiteTrainer:
         print("length of dataset: %d" % len(dataset))
         return dataset
 
-    # —— 多进程 worker —— #
+    # multiprocess self-play
     @staticmethod
     def _worker_self_play(payload):
         state_dict, cfg_dict, sims, reuse_tree = payload
@@ -113,7 +118,6 @@ class AZLiteTrainer:
         if self.num_workers <= 0:
             return self._self_play_batch_serial(games=games, sims=sims)
 
-        # 广播参数到子进程
         state_dict = {k: v.cpu() for k, v in self.model.state_dict().items()}
         cfg_dict = {
             'board_size': self.cfg.board_size,
@@ -195,7 +199,6 @@ class AZLiteTrainer:
                 print(f"[train] Epoch {ep+1}/{epochs}: self-play generating...")
                 self.self_play_and_train_epoch(games_per_epoch, sims, batch_size)
 
-                # TODO: modify the training method by selfPlay with last epoch. If win > 50% then update the parameters, otherwise do not update.
 
                 # now = time.time()
                 # if now - last_save_t >= self.save_every_sec:
@@ -238,7 +241,6 @@ def _list_dataset_files(dataset_dir: str) -> List[str]:
 def _load_dataset_files(file_paths: List[str]) -> List[Tuple[np.ndarray, np.ndarray, int, float, float]]:
     data = []
     for path in file_paths:
-        # Dataset files are produced by this codebase; allow full unpickling.
         try:
             data.extend(torch.load(path, map_location=device, weights_only=False))
         except (EOFError, RuntimeError, ValueError, pickle.UnpicklingError) as exc:
@@ -288,9 +290,9 @@ if __name__ == "__main__":
     trainer = AZLiteTrainer(board_size=9, win_k=4, hp_max=6, device=device,
                             save_dir=args.savePath, save_every_sec=300,
                             num_workers=0,
-                            shaped_reward_enabled=False,   # ← 打开/关闭 奖励塑形
-                            shaped_reward_coeff=0.05,     # ← 微奖励系数 λ
-                            reuse_tree=False,             # ← 是否根复用（默认关闭）
+                            shaped_reward_enabled=False,   # if enable reward shaping, usually false.
+                            shaped_reward_coeff=0.05,     # reward shaping coefficient λ
+                            reuse_tree=False,             # whether to reuse MCTS search tree in self-play
                             policy_endgame_weight=args.policyEndgameWeight,
                             value_endgame_weight=args.valueEndgameWeight)
     dataset_dir = os.path.join(default_save_path, "dataset")
