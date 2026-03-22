@@ -1,3 +1,4 @@
+--index-url https://download.pytorch.org/whl/cu118
 numpy
 scipy
 networkx
@@ -10,4 +11,6 @@ rich
 typer
 pytest
 torch
+torchvision
+torchaudio
 tqdm
