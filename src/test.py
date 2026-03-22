@@ -21,7 +21,7 @@ from .utils.checkpoint import load_checkpoint
 
 """
 Script for evaluating checkpoints via 1v1 matches. By default, it compares the two most recent checkpoints in the specified directory.
-Usage: python -m src.test --num_game 9 --sim 800
+Usage: python -m src.test
 """
 
 __IF__HPC__ = "SLURM_JOB_ID" in os.environ

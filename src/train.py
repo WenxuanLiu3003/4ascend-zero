@@ -40,8 +40,8 @@ class AZLiteTrainer:
                  shaped_reward_enabled: bool = False,
                  shaped_reward_coeff: float = 0.05,
                  reuse_tree: bool = False,
-                 policy_endgame_weight: float = 5.0,
-                 value_endgame_weight: float = 10.0):
+                 policy_endgame_weight: float = 10.0,
+                 value_endgame_weight: float = 20.0):
         self.cfg = RulesConfig(board_size=board_size, win_k=win_k, hp_max=hp_max)
         self.engine = Engine(win_k=self.cfg.win_k)
         self.encoder = AlphaZeroStateEncoder(last_k=8)
