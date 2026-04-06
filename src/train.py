@@ -270,9 +270,9 @@ if __name__ == "__main__":
     parser.add_argument('--trainOnly', action='store_true', help='Only train using datasets on disk')
     parser.add_argument('--trainFileChunk', type=int, default=120,
                         help='Number of dataset files loaded into RAM per trainOnly chunk')
-    parser.add_argument('--policyEndgameWeight', type=float, default=5.0,
+    parser.add_argument('--policyEndgameWeight', type=float, default=20.0,
                         help='Policy loss weight multiplier for endgame samples')
-    parser.add_argument('--valueEndgameWeight', type=float, default=10.0,
+    parser.add_argument('--valueEndgameWeight', type=float, default=50.0,
                         help='Value loss weight multiplier for endgame samples')
     args = parser.parse_args()
 
