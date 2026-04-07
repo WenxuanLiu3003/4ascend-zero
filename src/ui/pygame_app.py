@@ -75,18 +75,27 @@ class MCTSRunner:
         self.model.eval()
         self.loaded = True
 
-    def best_move(self, state: GameState):
+    def best_moves(self, state: GameState, best_n: int = 5):
         self.ensure_loaded()
         pi, root = self.mcts.run(state, turn_related_sim=-1)
         legal_mask = (state.board.grid == 0).astype(np.float32).reshape(-1)
         pi = pi * legal_mask
         if pi.sum() <= 1e-8:
-            return None, None
-        a = int(np.argmax(pi))
-        # 用该动作对应子节点 Q 近似“当前执手若下此处的胜率”
-        q = root.children[a].Q if a in root.children else 0.0
-        win_rate = float(np.clip((q + 1.0) * 0.5, 0.0, 1.0))
-        return divmod(a, self.cfg.board_size), win_rate
+            return []
+
+        best_n = max(1, int(best_n))
+        legal_actions = np.flatnonzero(pi > 0)
+        if legal_actions.size == 0:
+            return []
+
+        sorted_actions = legal_actions[np.argsort(pi[legal_actions])[::-1][:best_n]]
+        best_moves = []
+        for a in sorted_actions.tolist():
+            # 用该动作对应子节点 Q 近似“当前执手若下此处的胜率”
+            q = root.children[a].Q if a in root.children else 0.0
+            win_rate = float(np.clip((q + 1.0) * 0.5, 0.0, 1.0))
+            best_moves.append((divmod(a, self.cfg.board_size), win_rate))
+        return best_moves
 
 
 def _makes_four(grid: np.ndarray, r: int, c: int, stone: int, need: int = 4) -> bool:
@@ -240,8 +249,7 @@ def draw_board(
     screen,
     state: GameState,
     edit_mode: str | None,
-    run_best_rc,
-    run_best_winrate,
+    run_best_moves,
     run_busy: bool,
     run_msg: str,
     show_refresh_notice: bool,
@@ -371,15 +379,16 @@ def draw_board(
                 pygame.draw.circle(screen, GREEN, (cx - plant_r + 1, cy - 1), plant_r)
                 pygame.draw.circle(screen, GREEN, (cx + plant_r - 1, cy + 1), plant_r)
 
-    if run_best_rc is not None:
-        rr, cc = run_best_rc
-        cx = board_x0 + cc * cell
-        cy = board_y0 + rr * cell
-        pygame.draw.circle(screen, RUN_RED, (cx, cy), stone_r + 8, 3)
-        if run_best_winrate is not None:
+    if run_best_moves:
+        rate_font = pygame.font.SysFont(None, max(14, int(stone_r * 1.2)))
+        for idx, (run_best_rc, run_best_winrate) in enumerate(run_best_moves):
+            rr, cc = run_best_rc
+            cx = board_x0 + cc * cell
+            cy = board_y0 + rr * cell
+            color = RUN_RED if idx == 0 else ORANGE
+            pygame.draw.circle(screen, color, (cx, cy), stone_r + 8, 3)
             txt = f"{int(round(run_best_winrate * 100))}%"
-            rate_font = pygame.font.SysFont(None, max(14, int(stone_r * 1.2)))
-            label = rate_font.render(txt, True, RUN_RED)
+            label = rate_font.render(txt, True, color)
             lx = cx - label.get_width() // 2
             ly_txt = cy - label.get_height() // 2
             screen.blit(label, (lx, ly_txt))
@@ -391,6 +400,7 @@ def draw_board(
 def main():
     parser = argparse.ArgumentParser(description="4ascend pygame app")
     parser.add_argument("--NoAutoRefresh", action="store_true", help="Disable plant auto-refresh on real moves")
+    parser.add_argument("--best_n", type=int, default=5, help="Show top-n suggested moves when clicking Run")
     args = parser.parse_args()
 
     pygame.init()
@@ -414,8 +424,7 @@ def main():
     back_state: GameState | None = None
     swap_bw_display = False
     run_busy = False
-    run_best_rc = None
-    run_best_winrate = None
+    run_best_moves = []
     run_msg = ""
     refresh_notice_turn = -1
     while running:
@@ -432,8 +441,7 @@ def main():
                     edit_mode = None
                     back_state = None
                     swap_bw_display = False
-                    run_best_rc = None
-                    run_best_winrate = None
+                    run_best_moves = []
                     run_busy = False
                     run_msg = ""
                     refresh_notice_turn = -1
@@ -473,7 +481,7 @@ def main():
                     run_busy = True
                     run_msg = "Initializing MCTS..."
                     draw_board(
-                        screen, state, edit_mode, run_best_rc, run_best_winrate, run_busy, run_msg,
+                        screen, state, edit_mode, run_best_moves, run_busy, run_msg,
                         show_refresh_notice=(refresh_notice_turn == state.turn), swap_bw_display=swap_bw_display,
                     )
                     try:
@@ -481,14 +489,13 @@ def main():
                             mcts_runner = MCTSRunner(cfg, engine)
                         run_msg = "Running MCTS..."
                         draw_board(
-                            screen, state, edit_mode, run_best_rc, run_best_winrate, run_busy, run_msg,
+                            screen, state, edit_mode, run_best_moves, run_busy, run_msg,
                             show_refresh_notice=(refresh_notice_turn == state.turn), swap_bw_display=swap_bw_display,
                         )
-                        run_best_rc, run_best_winrate = mcts_runner.best_move(state)
-                        run_msg = "MCTS done" if run_best_rc is not None else "No legal move"
+                        run_best_moves = mcts_runner.best_moves(state, best_n=args.best_n)
+                        run_msg = f"MCTS done (top {max(1, args.best_n)})" if run_best_moves else "No legal move"
                     except Exception as exc:
-                        run_best_rc = None
-                        run_best_winrate = None
+                        run_best_moves = []
                         run_msg = f"Run failed: {exc}"
                     run_busy = False
                     continue
@@ -508,8 +515,7 @@ def main():
                     if back_state is not None:
                         state = back_state.copy()
                         back_state = None
-                        run_best_rc = None
-                        run_best_winrate = None
+                        run_best_moves = []
                         run_msg = ""
                         refresh_notice_turn = -1
                     continue
@@ -561,13 +567,12 @@ def main():
                                     clear_mask = ((prev_grid > 0) | (prev_attack_mask > 0)) & (state.board.grid == 0)
                                     state.board.plants[clear_mask] = 0
                             back_state = prev_state
-                            run_best_rc = None
-                            run_best_winrate = None
+                            run_best_moves = []
                             run_msg = ""
                         except AssertionError:
                             pass
         draw_board(
-            screen, state, edit_mode, run_best_rc, run_best_winrate, run_busy, run_msg,
+            screen, state, edit_mode, run_best_moves, run_busy, run_msg,
             show_refresh_notice=(refresh_notice_turn == state.turn), swap_bw_display=swap_bw_display,
         )
         clock.tick(60)
