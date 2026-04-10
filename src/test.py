@@ -25,6 +25,7 @@ Usage: python -m src.test
 """
 
 __IF__HPC__ = "SLURM_JOB_ID" in os.environ
+ENDGAME_STONE_THRESHOLD = 64
 
 
 def _list_model_files_by_mtime(save_path: str) -> List[str]:
@@ -73,7 +74,7 @@ def play_one_game(
     sims: int,
     device: str,
     c_puct: float = 2.0,
-) -> Optional[Player]:
+) -> Tuple[Optional[Player], bool]:
     encoder = AlphaZeroStateEncoder(last_k=8)
     engine = Engine(win_k=cfg.win_k)
     mcts_black = MCTS(model_black, encoder, engine, board_size=cfg.board_size,
@@ -86,6 +87,7 @@ def play_one_game(
     state = GameState(cfg=cfg, board=Board(cfg.board_size), to_play=Player.BLACK)
     prev_root = {Player.BLACK: None, Player.WHITE: None}
     last_action = {Player.BLACK: None, Player.WHITE: None}
+    entered_end_phase = False
 
     while not state.is_terminal():
         if state.to_play is Player.BLACK:
@@ -102,6 +104,8 @@ def play_one_game(
         action = _select_action(pi, state)
         r, c = divmod(action, cfg.board_size)
         state = engine.step(state, Move(r, c))
+        if np.count_nonzero(state.board.grid) >= ENDGAME_STONE_THRESHOLD:
+            entered_end_phase = True
 
         if state.to_play is Player.WHITE:
             prev_root[Player.BLACK] = root
@@ -110,7 +114,7 @@ def play_one_game(
             prev_root[Player.WHITE] = root
             last_action[Player.WHITE] = action
 
-    return _determine_winner(state)
+    return _determine_winner(state), entered_end_phase
 
 
 def evaluate_models(
@@ -138,7 +142,7 @@ def evaluate_models(
     for g in tqdm(range(num_game), desc="Eval games", unit="game"):
         start_t = time.perf_counter()
         if g % 2 == 0:
-            winner = play_one_game(model_a, model_b, cfg, sims, device)
+            winner, entered_end_phase = play_one_game(model_a, model_b, cfg, sims, device)
             if winner is Player.BLACK:
                 scores[path_a] += 1.0
             elif winner is Player.WHITE:
@@ -147,7 +151,7 @@ def evaluate_models(
                 scores[path_a] += 0.5
                 scores[path_b] += 0.5
         else:
-            winner = play_one_game(model_b, model_a, cfg, sims, device)
+            winner, entered_end_phase = play_one_game(model_b, model_a, cfg, sims, device)
             if winner is Player.BLACK:
                 scores[path_b] += 1.0
             elif winner is Player.WHITE:
@@ -157,6 +161,8 @@ def evaluate_models(
                 scores[path_b] += 0.5
         elapsed = time.perf_counter() - start_t
         tqdm.write(f"[test] game {g+1}/{num_game} finished in {elapsed:.2f}s")
+        if entered_end_phase:
+            tqdm.write("[test] entered end phase")
 
     best_path = max(scores.items(), key=lambda kv: kv[1])[0]
     return scores, best_path
@@ -166,7 +172,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate checkpoints via 1v1 matches.")
     default_path = os.environ.get("ASCEND_CHECKPOINT_DIR", "checkpoints")
     parser.add_argument("--savePath", type=str, default=default_path, help="path to checkpoints")
-    parser.add_argument("--num_game", type=int, default=9, help="games per pair (1v1)")
+    parser.add_argument("--num_game", type=int, default=11, help="games per pair (1v1)")
     parser.add_argument("--sim", type=int, default=800, help="MCTS simulations per move")
     parser.add_argument("--board_size", type=int, default=9)
     parser.add_argument("--win_k", type=int, default=4)
