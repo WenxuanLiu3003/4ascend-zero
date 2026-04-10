@@ -134,9 +134,9 @@ class Engine:
         
         ns.turn += 1
 
-        # plant refreshing
-        ns.grow_count -= 1
         if not ns.phase == Phase.ATTACK_DEFENSE:  # If we just enter the attack phase, do not create any plant
+            # plant refreshing
+            ns.grow_count -= 1
             if ns.grow_count <= 0 or (s.phase == Phase.ATTACK_DEFENSE and not ns.just_unascend):  # create plant only when grow_count runs out, or (leaving the ascend phase and we are not in a continuous ascending)
                 ns.grow_count = max(7, int(11 - int(ns.turn / 22) * 2))
                 stone_count = np.sum(ns.board.grid > 0)
