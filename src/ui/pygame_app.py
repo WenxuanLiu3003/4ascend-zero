@@ -6,6 +6,7 @@ import sys
 import argparse
 import pygame
 import numpy as np
+import torch
 
 from ..core.rules import RulesConfig
 from ..core.board import Board
