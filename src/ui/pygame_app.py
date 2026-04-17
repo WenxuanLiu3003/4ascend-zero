@@ -33,7 +33,7 @@ STONE_R = 18         # 棋子半径
 PLANT_R = 6          # 植物小圆半径（最多画两个）
 GRID_EXT = 10        # 网格线向外延伸像素
 CLICK_TOL = 16       # 点击吸附到交叉点的容差（像素）
-RUN_MCTS_SIMS = 1600
+RUN_MCTS_SIMS = 1600 if torch.cuda.is_available() else 400
 
 
 class MCTSRunner:

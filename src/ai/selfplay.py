@@ -49,7 +49,7 @@ class SelfPlay:
         step_idx = 0
         prev_root = None
         last_action = None
-        end_game_explore_coef = 4
+        end_game_explore_coef = 2
         base_c_puct = mcts.c_puct
 
         while not s.is_terminal():
