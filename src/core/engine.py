@@ -79,9 +79,10 @@ class Engine:
             if ns.unascend_charge > 0:
                 ns.unascend_charge -= 1
 
-            for index in range(2):
-                if ns.Aunascend_charge_fast[index] > 0:
-                    ns.Aunascend_charge_fast[index] -= 1
+            if ns.phase is not Phase.ATTACK_DEFENSE and s.phase is not Phase.ATTACK_DEFENSE:
+                for index in range(2):
+                    if ns.Aunascend_charge_fast[index] > 0:
+                        ns.Aunascend_charge_fast[index] -= 1
 
         elif ns.phase is Phase.ATTACK_DEFENSE:
             """
@@ -145,7 +146,15 @@ class Engine:
                 if ns.over_fill and stone_count < 22:
                     ns.over_fill = False
                 flower_num = 3 if s.turn >= 65 else 2
-                self._refresh_plants(ns, flower_num, just_ascend=(s.phase == Phase.ATTACK_DEFENSE))
+                atk_cell_refresh = None if 'atk_cells' not in locals() else atk_cells
+                def_cell_refresh = None if 'def_cells' not in locals() else def_cells
+                self._refresh_plants(
+                    ns,
+                    flower_num,
+                    just_ascend=(s.phase == Phase.ATTACK_DEFENSE),
+                    atk_cell_refresh=atk_cell_refresh,
+                    def_cell_refresh=def_cell_refresh,
+                )
                 if ns.over_fill:
                     ns.grow_count = int(ns.grow_count / 2)
                 if ns.grow_count % 2 == 0:
@@ -329,22 +338,89 @@ class Engine:
             axis_counts.append(count)
         return max(axis_counts), sum(axis_counts) - 3
 
-    def _refresh_plants(self, s: GameState, flower_num: int, just_ascend: bool) -> None:
+    def _refresh_plants(self, s: GameState, flower_num: int, just_ascend: bool, atk_cell_refresh=None, def_cell_refresh=None) -> None:
         """
         refreshing the plants
         """
         board = s.board
         size = board.size
+
+        # candidates = [(r, c)
+        #               for r in range(size) for c in range(size)
+        #               if board.grid[r, c] == 0 and board.plants[r, c] < 2]
+        # if not candidates:
+        #     return
+        atk_cell_refresh = set() if atk_cell_refresh is None else set(atk_cell_refresh)
+        def_cell_refresh = set() if def_cell_refresh is None else set(def_cell_refresh)
+        
+        flag3 = just_ascend
+        flag4 = just_ascend and s.unascend_charge <= 0
+        tst1 = 0b0000
+        if s.Aunascend_charge_fast[0] == 0: 
+            tst1 |= 0b0100
+        if s.Aunascend_charge_fast[1] == 0:
+            tst1 |= 0b1000
+        if tst1 == 0b0000:
+            tst1 = 0b0011
+        tst2 = tst1
+
+        candidates = []
+        candidate_num = 0
+        for rep in range(2):
+            for r in range(size):
+                for c in range(size):
+                    candidate_centre_cond = False
+                    tstd = 0b0000
+                    if board.grid[r, c] == 1:
+                        tstd = 0b0001
+                    elif board.grid[r, c] == 2:
+                        tstd = 0b0010
+                    elif (r, c) in atk_cell_refresh:
+                        tstd = 0b0100
+                    elif (r, c) in def_cell_refresh:
+                        tstd = 0b1000
+
+                    if flag3:
+                        cond1 = tstd & tst2
+                        if cond1:  
+                            candidate_centre_cond = True
+                        else:
+                            if board.grid[r, c] == 0:
+                                candidate_centre_cond = False
+                            else:
+                                if flag4:
+                                    candidate_centre_cond = True
+                                else:
+                                    candidate_centre_cond = s.over_fill
+                    else:
+                        candidate_centre_cond = (board.grid[r, c] != 0)
+                    
+                    if candidate_centre_cond:
+                        for dr in (-1, 0, 1):
+                            for dc in (-1, 0, 1):
+                                if dr == 0 and dc == 0:
+                                    continue
+                                nr, nc = r + dr, c + dc
+                                if (
+                                    _in_bounds(size, nr, nc)
+                                    and board.grid[nr, nc] == 0
+                                    and board.plants[nr, nc] < 2
+                                    and (nr, nc) not in candidates
+                                ):
+                                    candidates.append((nr, nc))
+                                    candidate_num += 1
+            if candidate_num == 0 and flag3:
+                tst2 |= 0b1100
+            else:
+                break
+
         if s.over_fill:
             flower_num += 1
 
-        candidates = [(r, c)
-                      for r in range(size) for c in range(size)
-                      if board.grid[r, c] == 0 and board.plants[r, c] < 2]
-        if not candidates:
+        k = min(flower_num, len(candidates))
+        if k <= 0: 
             return
 
-        k = min(flower_num, len(candidates))
         weighted_candidates = []
         attacker_idx = s.to_play.value
         defender_idx = s.to_play.other().value
