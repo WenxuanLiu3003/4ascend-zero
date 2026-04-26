@@ -439,6 +439,7 @@ class Engine:
             )
             # determine the place to refresh the plants
             max_align = [black_max_align, white_max_align]  # black: 0, white: 1
+            max_align_total = [black_max_align_total, white_max_align_total]  # black: 0, white: 1
             _ovr_bits = [0, 0]
             weight = 500 + random.randint(0, 20)
             flag5 = False
@@ -456,22 +457,43 @@ class Engine:
                     weight -= 450
 
             if just_ascend:
-                max_align_total = [black_max_align_total, white_max_align_total]  # black: 0, white: 1
-                if max_align_total[attacker_idx] > max_align_total[defender_idx]:
-                    weight += (max_align_total[attacker_idx] - max_align_total[defender_idx]) * 3
-                if max_align[attacker_idx] > max_align[defender_idx]:
-                    weight += (max_align[attacker_idx] - max_align[defender_idx]) * 15
+                if max_align_total[attacker_idx] < max_align_total[defender_idx]:
+                    weight -= abs(max_align_total[attacker_idx] - max_align_total[defender_idx]) * 3
+                if max_align[attacker_idx] < max_align[defender_idx]:
+                    weight -= abs(max_align[attacker_idx] - max_align[defender_idx]) * 15
                 if max_align[attacker_idx] == 3 and max_align[defender_idx] <= 1:
                     if flag4:
                         flag5 = True
                     else:
                         weight += int(zsin(25 - s.unascend_charge, 25.0) * 120.0)
             else:   
-                pass  # TODO: there is a branch in the original logic that has no implementation, corresponding to TTRPlant.cs line 227-228
+                current_idx = s.to_play.value
+                opponent_idx = s.to_play.other().value
+
+                cond1 = 0 if max_align_total[current_idx] <= max_align_total[opponent_idx] else (0 if flag1 else 1)
+                cond2 = 1 if flag2 else 0
+                cond3 = (max_align_total[current_idx] < max_align_total[opponent_idx] & flag1) and not flag2
+                if (cond1 and cond2) or cond3:
+                    weight += abs(max_align_total[current_idx] - max_align_total[opponent_idx]) * 6
+                elif max_align_total[current_idx] != max_align_total[opponent_idx]:
+                    weight -= abs(max_align_total[current_idx] - max_align_total[opponent_idx]) * 3
+                if max_align[current_idx] != max_align[opponent_idx]:
+                    weight -= abs(max_align[current_idx] - max_align[opponent_idx]) * 15
             if board.plants[r, c] > 0 and not flag4:
                 weight -= 30
-            elif True:
-                pass  # TODO: athere is a branch in the original logic that has no implementation, corresponding to TTRPlant.cs line 230-231
+            else:
+                tstd = 0b0000
+                if board.grid[r, c] == 1:
+                    tstd = 0b0001
+                elif board.grid[r, c] == 2:
+                    tstd = 0b0010
+                elif (r, c) in atk_cell_refresh:
+                    tstd = 0b0100
+                elif (r, c) in def_cell_refresh:
+                    tstd = 0b1000
+                if (tstd & tst1) and just_ascend:
+                    weight += 50
+                
 
             if _ovr_bits[0] or _ovr_bits[1]:
                 ovr_buff.append(
