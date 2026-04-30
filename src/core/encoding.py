@@ -106,23 +106,24 @@ class AlphaZeroStateEncoder:
 
         # plane 6: whether it's currently ascend phase
         is_ad = np.full((H, W), 1.0 if s.phase.name == "ATTACK_DEFENSE" else 0.0, dtype=np.float32)
+        # plane 7: whether it's currently the turn of the first player
         my_turn = np.full((H, W), 1.0 if s.to_play is Player.BLACK else 0.0, dtype=np.float32)
         planes.extend([is_ad, my_turn])
 
-        # plane 7: grow count parity 
+        # plane 8: grow count parity 
         if s.phase is Phase.ATTACK_DEFENSE:
             grow_parity = np.full((H, W), 1, dtype=np.float32)
         else:
             grow_parity = np.full((H, W), float(s.grow_count % 2), dtype=np.float32)
         planes.append(grow_parity)
 
-        # plane 8,9: potential >=4-in-a-row lengths for me and opponent at each position (if I/they place a stone there)
+        # plane 9,10: potential >=4-in-a-row lengths for me and opponent at each position (if I/they place a stone there)
         me_ge4_axis_sum = self._ge4_axis_sum_plane(grid, me_id)
         opp_ge4_axis_sum = self._ge4_axis_sum_plane(grid, opp_id)
         planes.extend([me_ge4_axis_sum, opp_ge4_axis_sum])
 
 
-        # planes 10-24: historical stone distributions for both sides in the last 7 moves (if available), from old to new. If not enough history, fill with zeros.
+        # planes 11-24: historical stone distributions for both sides in the last 7 moves (if available), from old to new. If not enough history, fill with zeros.
         for j in range(1, self.last_k):
             if j > len(s.last_moves):
                 planes.extend([np.zeros((H, W), dtype=np.float32), np.zeros((H, W), dtype=np.float32)])
