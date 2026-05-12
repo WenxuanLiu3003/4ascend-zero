@@ -49,14 +49,14 @@ class SelfPlay:
         step_idx = 0
         prev_root = None
         last_action = None
-        end_game_explore_coef = 2
-        base_c_puct = mcts.c_puct
+        end_game_explore_coef = 1.5
+        base_sims = mcts.sims
 
         while not s.is_terminal():
-            if np.count_nonzero(s.board.grid) > 60:
-                mcts.c_puct = base_c_puct * end_game_explore_coef
+            if np.count_nonzero(s.board.grid) > 50:
+                mcts.sims = int(base_sims * end_game_explore_coef)
             else:
-                mcts.c_puct = base_c_puct
+                mcts.sims = base_sims
 
             if self.use_tree_reuse:
                 pi, root = mcts.run(s, prev_root=prev_root, last_action=last_action, turn_related_sim=-1, turn_related_sim_coef=0.5)
