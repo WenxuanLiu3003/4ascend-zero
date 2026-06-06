@@ -20,8 +20,6 @@ from .core.state import GameState
 from .core.types import Move, Player
 from .utils.checkpoint import load_checkpoint
 
-ENDGAME_STONE_THRESHOLD = 64
-
 
 @dataclass(frozen=True)
 class MatchResult:
@@ -79,7 +77,7 @@ def play_one_game(
     sims: int,
     device: str,
     c_puct: float = 2.0,
-) -> Tuple[Optional[Player], bool]:
+) -> Optional[Player]:
     encoder = AlphaZeroStateEncoder(last_k=8)
     engine = Engine(win_k=cfg.win_k)
     mcts_black = MCTS(
@@ -108,8 +106,6 @@ def play_one_game(
     state = GameState(cfg=cfg, board=Board(cfg.board_size), to_play=Player.BLACK)
     prev_root = {Player.BLACK: None, Player.WHITE: None}
     last_action = {Player.BLACK: None, Player.WHITE: None}
-    entered_end_phase = False
-
     while not state.is_terminal():
         if state.to_play is Player.BLACK:
             mcts = mcts_black
@@ -130,8 +126,6 @@ def play_one_game(
         action = _select_action(pi, state)
         r, c = divmod(action, cfg.board_size)
         state = engine.step(state, Move(r, c))
-        if np.count_nonzero(state.board.grid) >= ENDGAME_STONE_THRESHOLD:
-            entered_end_phase = True
 
         if state.to_play is Player.WHITE:
             prev_root[Player.BLACK] = root
@@ -140,7 +134,7 @@ def play_one_game(
             prev_root[Player.WHITE] = root
             last_action[Player.WHITE] = action
 
-    return _determine_winner(state), entered_end_phase
+    return _determine_winner(state)
 
 
 def _load_model(path: str, cfg: RulesConfig, device: str) -> PolicyValueNet:
@@ -174,7 +168,7 @@ def play_match(
     draws = 0
 
     for _ in range(games_per_color):
-        winner, _ = play_one_game(model_a, model_b, cfg, sims, device)
+        winner = play_one_game(model_a, model_b, cfg, sims, device)
         if winner is Player.BLACK:
             a_wins += 1
         elif winner is Player.WHITE:
@@ -183,7 +177,7 @@ def play_match(
             draws += 1
 
     for _ in range(games_per_color):
-        winner, _ = play_one_game(model_b, model_a, cfg, sims, device)
+        winner = play_one_game(model_b, model_a, cfg, sims, device)
         if winner is Player.BLACK:
             b_wins += 1
         elif winner is Player.WHITE:
@@ -276,10 +270,10 @@ def main() -> None:
     parser.add_argument(
         "--games_per_color",
         type=int,
-        default=3,
+        default=2,
         help="number of games with each model taking black once per pairing",
     )
-    parser.add_argument("--sim", type=int, default=800, help="MCTS simulations per move")
+    parser.add_argument("--sim", type=int, default=1600, help="MCTS simulations per move")
     parser.add_argument("--board_size", type=int, default=9)
     parser.add_argument("--win_k", type=int, default=4)
     parser.add_argument("--hp_max", type=int, default=6)
