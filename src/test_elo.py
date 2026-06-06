@@ -4,7 +4,7 @@ import argparse
 import os
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -21,17 +21,13 @@ from .core.types import Move, Player
 from .utils.checkpoint import load_checkpoint
 
 ENDGAME_STONE_THRESHOLD = 64
-DEFAULT_ELO = 1000.0
-DEFAULT_K_FACTOR = 32.0
-DEFAULT_MAX_ELO_ITERS = 512
-DEFAULT_ELO_TOL = 1e-3
 
 
 @dataclass(frozen=True)
 class MatchResult:
     path_a: str
     path_b: str
-    score_a: float
+    winner_name: str
     a_wins: int
     b_wins: int
     draws: int
@@ -166,11 +162,13 @@ def _release_model(model: Optional[PolicyValueNet], device: str) -> None:
 def play_match(
     model_a: PolicyValueNet,
     model_b: PolicyValueNet,
+    path_a: str,
+    path_b: str,
     cfg: RulesConfig,
     sims: int,
     device: str,
     games_per_color: int,
-) -> Tuple[float, int, int, int]:
+) -> Tuple[str, int, int, int]:
     a_wins = 0
     b_wins = 0
     draws = 0
@@ -194,10 +192,10 @@ def play_match(
             draws += 1
 
     if a_wins > b_wins:
-        return 1.0, a_wins, b_wins, draws
+        return os.path.basename(path_a), a_wins, b_wins, draws
     if a_wins < b_wins:
-        return 0.0, a_wins, b_wins, draws
-    return 0.5, a_wins, b_wins, draws
+        return os.path.basename(path_b), a_wins, b_wins, draws
+    return "draw", a_wins, b_wins, draws
 
 
 def evaluate_all_models(
@@ -206,13 +204,14 @@ def evaluate_all_models(
     games_per_color: int,
     sims: int,
     device: str,
+    output_path: Optional[str] = None,
 ) -> List[MatchResult]:
     if len(model_paths) < 2:
         return []
 
     results: List[MatchResult] = []
     total_pairs = len(model_paths) * (len(model_paths) - 1) // 2
-    pair_bar = tqdm(total=total_pairs, desc="Elo matches", unit="pair")
+    pair_bar = tqdm(total=total_pairs, desc="Pair matches", unit="pair")
 
     for idx, path_a in enumerate(model_paths[:-1]):
         model_a: Optional[PolicyValueNet] = None
@@ -223,24 +222,27 @@ def evaluate_all_models(
                 start_t = time.perf_counter()
                 try:
                     model_b = _load_model(path_b, cfg, device)
-                    score_a, a_wins, b_wins, draws = play_match(
+                    winner_name, a_wins, b_wins, draws = play_match(
                         model_a=model_a,
                         model_b=model_b,
+                        path_a=path_a,
+                        path_b=path_b,
                         cfg=cfg,
                         sims=sims,
                         device=device,
                         games_per_color=games_per_color,
                     )
-                    results.append(
-                        MatchResult(
-                            path_a=path_a,
-                            path_b=path_b,
-                            score_a=score_a,
-                            a_wins=a_wins,
-                            b_wins=b_wins,
-                            draws=draws,
-                        )
+                    result = MatchResult(
+                        path_a=path_a,
+                        path_b=path_b,
+                        winner_name=winner_name,
+                        a_wins=a_wins,
+                        b_wins=b_wins,
+                        draws=draws,
                     )
+                    results.append(result)
+                    if output_path is not None:
+                        append_match_results(output_path, [result])
                     elapsed = time.perf_counter() - start_t
                     tqdm.write(
                         "[test-elo] "
@@ -257,66 +259,18 @@ def evaluate_all_models(
     return results
 
 
-def fit_elo_ratings(
-    model_paths: Sequence[str],
-    match_results: Sequence[MatchResult],
-    *,
-    base_rating: float = DEFAULT_ELO,
-    k_factor: float = DEFAULT_K_FACTOR,
-    max_iters: int = DEFAULT_MAX_ELO_ITERS,
-    tolerance: float = DEFAULT_ELO_TOL,
-) -> Dict[str, float]:
-    if not model_paths:
-        return {}
-    if len(model_paths) == 1:
-        return {model_paths[0]: base_rating}
-
-    index = {path: idx for idx, path in enumerate(model_paths)}
-    ratings = np.full(len(model_paths), base_rating, dtype=np.float64)
-
-    for _ in range(max_iters):
-        delta = np.zeros(len(model_paths), dtype=np.float64)
-        counts = np.zeros(len(model_paths), dtype=np.int32)
-
+def append_match_results(output_path: str, match_results: Sequence[MatchResult]) -> None:
+    with open(output_path, "a", encoding="utf-8") as output_file:
         for result in match_results:
-            idx_a = index[result.path_a]
-            idx_b = index[result.path_b]
-            expected_a = 1.0 / (1.0 + 10.0 ** ((ratings[idx_b] - ratings[idx_a]) / 400.0))
-            error = result.score_a - expected_a
-            delta[idx_a] += error
-            delta[idx_b] -= error
-            counts[idx_a] += 1
-            counts[idx_b] += 1
-
-        max_step = 0.0
-        for idx, count in enumerate(counts):
-            if count == 0:
-                continue
-            step = k_factor * (delta[idx] / count)
-            ratings[idx] += step
-            max_step = max(max_step, abs(step))
-
-        ratings -= ratings.mean()
-        ratings += base_rating
-        if max_step < tolerance:
-            break
-
-    return {path: float(ratings[index[path]]) for path in model_paths}
-
-
-def write_elo_csv(output_path: str, ratings: Dict[str, float]) -> None:
-    sorted_rows = sorted(
-        ((os.path.basename(path), elo) for path, elo in ratings.items()),
-        key=lambda item: item[1],
-        reverse=True,
-    )
-    with open(output_path, "w", encoding="utf-8") as output_file:
-        for model_name, elo in sorted_rows:
-            output_file.write(f"{model_name}, {elo:.2f}\n")
+            output_file.write(
+                f"{os.path.basename(result.path_a)}, "
+                f"{os.path.basename(result.path_b)}, "
+                f"{result.winner_name}\n"
+            )
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Evaluate all checkpoints and estimate Elo ratings.")
+    parser = argparse.ArgumentParser(description="Evaluate all checkpoints and record pairwise winners.")
     default_path = os.environ.get("ASCEND_CHECKPOINT_DIR", "checkpoints")
     parser.add_argument("--savePath", type=str, default=default_path, help="path to checkpoints")
     parser.add_argument(
@@ -329,7 +283,12 @@ def main() -> None:
     parser.add_argument("--board_size", type=int, default=9)
     parser.add_argument("--win_k", type=int, default=4)
     parser.add_argument("--hp_max", type=int, default=6)
-    parser.add_argument("--output", type=str, default="elo.csv", help="path to Elo csv output")
+    parser.add_argument(
+        "--output",
+        type=str,
+        default="match_results.txt",
+        help="path to append-only match result output",
+    )
     args = parser.parse_args()
 
     if args.games_per_color <= 0:
@@ -353,12 +312,14 @@ def main() -> None:
         games_per_color=int(args.games_per_color),
         sims=int(args.sim),
         device=device,
+        output_path=args.output,
     )
-    ratings = fit_elo_ratings(model_paths, match_results)
-    write_elo_csv(args.output, ratings)
-
-    for path, elo in sorted(ratings.items(), key=lambda item: item[1], reverse=True):
-        print(f"{os.path.basename(path)}\t{elo:.2f}")
+    for result in match_results:
+        print(
+            f"{os.path.basename(result.path_a)}\t"
+            f"{os.path.basename(result.path_b)}\t"
+            f"{result.winner_name}"
+        )
     print(f"[test-elo] wrote {args.output}")
 
 
