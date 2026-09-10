@@ -237,48 +237,25 @@ class Engine:
         def_power = [int(board.plants[r, c]) + 1 for (r, c) in def_cells]
 
         while atk_power and def_power:
-            atk_max = max(atk_power)
-            def_max = max(def_power)
-            atk_act = atk_max >= def_max
-
-            if atk_act:
-                idx = atk_power.index(atk_max)
-                p = atk_power[idx]
-                for p1 in sorted(def_power, reverse=True):
-                    if p1 > p:
-                        # Consume the active power even against a larger opponent.
-                        def_power.remove(p1)
-                        def_power.append(p1 - p)
-                        def_power.sort(reverse=True)
+            atk_power.sort(reverse=True)
+            def_power.sort(reverse=True)
+            active, opposing = (atk_power, def_power) if atk_power[0] >= def_power[0] else (def_power, atk_power)
+            p = active.pop(0)
+            while p and opposing:
+                p1 = opposing.pop(0)
+                if p1 > p:
+                    if s.cfg.relay_cancellation:
+                        # The survivor takes over immediately, facing the other
+                        # side's largest remaining power until an exact cancel.
+                        p = p1 - p
+                        active, opposing = opposing, active
+                    else:
+                        opposing.append(p1 - p)
                         p = 0
-                        break
-                    p -= p1
-                    def_power.remove(p1)
-                    if p == 0:
-                        break
-                if p == 0:
-                    del atk_power[idx]
                 else:
-                    atk_power[idx] = p
-            else:
-                idx = def_power.index(def_max)
-                p = def_power[idx]
-                for p1 in sorted(atk_power, reverse=True):
-                    if p1 > p:
-                        # Consume the active power even against a larger opponent.
-                        atk_power.remove(p1)
-                        atk_power.append(p1 - p)
-                        atk_power.sort(reverse=True)
-                        p = 0
-                        break
                     p -= p1
-                    atk_power.remove(p1)
-                    if p == 0:
-                        break
-                if p == 0:
-                    del def_power[idx]
-                else:
-                    def_power[idx] = p
+            if p:
+                active.append(p)
 
         if atk_power:
             damage = len(atk_power)

@@ -11,6 +11,9 @@ class RulesConfig:
 
     hp_max: int = 6
 
+    # False: requeue survivors; True: survivors continue cancelling immediately.
+    relay_cancellation: bool = True
+
     # expired variables, useless in current rules; kept for compatibility with old checkpoints
     ad_attacker_hp_delta_on_fail: int = -1
     ad_defender_hp_delta_on_fail: int = +1

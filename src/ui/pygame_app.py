@@ -213,6 +213,7 @@ def _build_buttons(layout, edit_mode):
         "run": run_rect,
         "exit_edit": exit_edit_rect,
         "switch_bw": switch_bw_rect,
+        "rule": pygame.Rect(x0, y0 + (btn_h + gap) * 6, btn_w, btn_h),
         "back": back_rect,
         "active_black": edit_mode == "black",
         "active_white": edit_mode == "white",
@@ -339,6 +340,8 @@ def draw_board(
     _draw_button(screen, buttons["run"], "Run", smallfont, active=run_busy)
     _draw_button(screen, buttons["exit_edit"], "Exit Edit", smallfont, active=False)
     _draw_button(screen, buttons["switch_bw"], "Switch B&W", smallfont, active=swap_bw_display)
+    rule_label = "Rule: Relay [T]" if state.cfg.relay_cancellation else "Rule: Requeue [T]"
+    _draw_button(screen, buttons["rule"], rule_label, smallfont, active=state.cfg.relay_cancellation)
     _draw_button(screen, buttons["back"], "Back", smallfont, active=False)
 
     board_x0 = ly["board_x0"]
@@ -454,6 +457,10 @@ def main():
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     running = False
+                elif event.key == pygame.K_t:
+                    cfg.relay_cancellation = not cfg.relay_cancellation
+                    run_best_moves = []
+                    run_msg = ""
                 elif event.key == pygame.K_r:
                     # 重新开始
                     board = Board(cfg.board_size)
@@ -480,6 +487,11 @@ def main():
                         state.grow_count -= 1
                     continue
                 buttons = _build_buttons(layout, edit_mode)
+                if buttons["rule"].collidepoint(event.pos):
+                    cfg.relay_cancellation = not cfg.relay_cancellation
+                    run_best_moves = []
+                    run_msg = ""
+                    continue
                 if buttons["black"].collidepoint(event.pos):
                     if run_busy:
                         continue
