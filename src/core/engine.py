@@ -246,7 +246,12 @@ class Engine:
                 p = atk_power[idx]
                 for p1 in sorted(def_power, reverse=True):
                     if p1 > p:
-                        continue
+                        # Consume the active power even against a larger opponent.
+                        def_power.remove(p1)
+                        def_power.append(p1 - p)
+                        def_power.sort(reverse=True)
+                        p = 0
+                        break
                     p -= p1
                     def_power.remove(p1)
                     if p == 0:
@@ -260,7 +265,12 @@ class Engine:
                 p = def_power[idx]
                 for p1 in sorted(atk_power, reverse=True):
                     if p1 > p:
-                        continue
+                        # Consume the active power even against a larger opponent.
+                        atk_power.remove(p1)
+                        atk_power.append(p1 - p)
+                        atk_power.sort(reverse=True)
+                        p = 0
+                        break
                     p -= p1
                     atk_power.remove(p1)
                     if p == 0:

@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from .ai.model import PolicyValueNet
+from .ai.inference import InferenceModel, load_inference_checkpoint
 from .ai.mcts import MCTS
 from .core.board import Board
 from .core.engine import Engine
@@ -17,7 +17,6 @@ from .core.rules import RulesConfig
 from .core.state import GameState
 from .core.types import Player, Move
 from .core.encoding import AlphaZeroStateEncoder
-from .utils.checkpoint import load_checkpoint
 
 """
 Script for evaluating checkpoints via 1v1 matches. By default, it compares the two most recent checkpoints in the specified directory.
@@ -68,8 +67,8 @@ def _select_action(pi: np.ndarray, state: GameState) -> int:
 
 
 def play_one_game(
-    model_black: PolicyValueNet,
-    model_white: PolicyValueNet,
+    model_black: InferenceModel,
+    model_white: InferenceModel,
     cfg: RulesConfig,
     sims: int,
     device: str,
@@ -124,12 +123,9 @@ def evaluate_models(
     sims: int,
     device: str,
 ) -> Tuple[Dict[str, float], str]:
-    encoder = AlphaZeroStateEncoder(last_k=8)
-    models: Dict[str, PolicyValueNet] = {}
+    models: Dict[str, InferenceModel] = {}
     for path in model_paths:
-        model = PolicyValueNet(in_planes=encoder.num_planes, board_size=cfg.board_size).to(device)
-        load_checkpoint(path, model, optimizer=None, map_location=device)
-        model.eval()
+        model = load_inference_checkpoint(path, board_size=cfg.board_size)
         models[path] = model
 
     scores = {path: 0.0 for path in model_paths}
@@ -179,7 +175,8 @@ def main() -> None:
     parser.add_argument("--hp_max", type=int, default=6)
     args = parser.parse_args()
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "cpu"
+    torch.set_num_threads(1)
     cfg = RulesConfig(board_size=args.board_size, win_k=args.win_k, hp_max=args.hp_max)
 
     if not os.path.isdir(args.savePath):

@@ -1,5 +1,104 @@
 # 4ascend-Zero: Alphago-Zero-Style AI for the 4ascend Game
 
+## CPU ONNX inference / GPU PyTorch training
+
+All MCTS inference (self-play, match/Elo evaluation, replay generation and the
+pygame UI) defaults to **ONNX Runtime on CPU, FP32**, with optional PyTorch CPU
+inference. Gradient training remains
+PyTorch, using CUDA when available. Dataset `.pt` files and training checkpoints
+keep their existing formats.
+
+Install inference dependencies into the existing virtual environment:
+
+```bash
+source .venv/bin/activate
+python -m pip install -r requirements-inference.txt
+```
+
+PyTorch 2.6 or newer is needed for the explicit exporter API (the current HPC
+environment uses 2.8). No ncnn/pnnx dependencies are required for production.
+
+The manual HPC workflow stays the same; submit from the project root:
+
+```bash
+sbatch play.sh       # generate data: CPU ONNX, sim=2400, 80 games per task/run
+sbatch train.sh      # run later when enough data exists: original GPU training
+sbatch test.sh       # CPU ONNX match evaluation
+sbatch test-elo.sh   # CPU ONNX Elo evaluation
+```
+
+Switch inference backend for a new process/job with `ASCEND_INFERENCE_BACKEND`:
+
+```bash
+ASCEND_INFERENCE_BACKEND=onnx sbatch play.sh     # default
+ASCEND_INFERENCE_BACKEND=pytorch sbatch play.sh
+ASCEND_INFERENCE_BACKEND=pytorch sbatch test.sh
+ASCEND_INFERENCE_BACKEND=pytorch sbatch test-elo.sh
+ASCEND_INFERENCE_BACKEND=pytorch python -m src.ui.pygame_app
+```
+
+The same setting covers replay self-play. Both backends stay on CPU; this environment
+variable does not enable GPU inference. Existing running jobs keep their backend. Invalid
+values fail explicitly when inference is requested. `--trainOnly` ignores this
+variable completely: its model, training device, gradient updates and optimizer
+are unaffected. `train.sh` is unchanged. Inference uses a detached CPU snapshot,
+so it never changes the caller's training model mode, device or parameters.
+PyTorch inference needs no ONNX packages and creates no ONNX cache. CLI/UI
+PyTorch inference uses one Torch thread, as in the earlier CPU measurements;
+`ASCEND_ONNX_THREADS` applies only to ONNX inference.
+
+For **pygame human-vs-AI only**, restore PyTorch CUDA inference explicitly:
+
+```bash
+python -m src.ui.pygame_app --device cuda
+```
+
+This loads the same `.pt` checkpoint directly into PyTorch on the GPU, bypassing
+ONNX and `ASCEND_INFERENCE_BACKEND`. CUDA must be available; otherwise the app
+reports an error instead of silently changing backend. This mode restores the
+original GPU search default of 800 simulations. `--device cpu` (or no flag)
+keeps 400 simulations and the CPU backend selected above. This option does not
+affect batch self-play, replay generation, test/Elo scripts or gradient training.
+
+`play.sh`, `test.sh` and `test-elo.sh` request **8 CPUs and 2GB RAM per array task**,
+with no GPU allocation. Their original array sizes and play requeue policy are
+retained; failures stop instead of triggering another requeue. No new scheduling,
+automatic training, checkpoint watching or dataset deletion is added.
+
+Each process loads its selected `.pt` checkpoint at startup. In ONNX mode it
+automatically exports a validated ONNX model if needed. New weights produce a different cache
+entry on the next run. An already running job keeps its loaded weights. Models
+are cached in `.onnx_cache/`, with locks and atomic publication for concurrent
+array jobs. `ASCEND_ONNX_CACHE_DIR` can override the cache directory, and
+`ASCEND_ONNX_THREADS` overrides the inference thread budget (default up to 8).
+Multiprocess self-play divides that budget among workers. Export failures or
+numerical validation failures are reported; there is no silent backend fallback.
+
+The existing `ASCEND_CHECKPOINT_DIR` / `--savePath` behavior is retained for the
+CLI scripts. GUI/replay still use their existing `checkpoints/` location. The
+pygame CPU search default is 400 simulations. Search, rules, temperatures,
+Dirichlet noise and augmentation are otherwise unchanged. Self-play uses 2400
+simulations by default, increased to 3600 when more than 50 stones occupy the
+board. Each task/run plays 80 games, saving one dataset file per ten-game chunk.
+
+`--trainOnly` does not load ONNX or create inference sessions. If the existing
+combined self-play/training mode is used, each self-play batch snapshots the
+current training weights on CPU without changing the training model or optimizer.
+
+Model integration tests must run on a compute node:
+`python -m pytest -q tests/test_onnx_inference.py`.
+They skip outside a Slurm allocation to avoid inference on login nodes. They
+cover output consistency, cache reuse/corruption, dataset compatibility, both
+backends and the inference entrypoints. They also verify identical gradient and
+optimizer updates after inference, and no ONNX imports in PyTorch mode.
+These short tests do not establish the
+peak RAM requirement of a complete ten-game production batch; monitor `MaxRSS`
+and override `sbatch --mem=...` if the production workload needs more than 2GB.
+
+The old `selfplay_benchmark/` experiment directory has been removed. Original
+copies of the three previously Git-ignored shell scripts are retained locally in
+`.onnx_cache/script-backups/` for rollback; the new versions are no longer ignored.
+
 ## Overview
 **4ascend-Zero** is an AlphaZero-style reinforcement learning system built for the **4ascend board game**, a 9×9 strategy game featuring dynamic attack–defense mechanics, plant-based resource tiles, and HP-based victory conditions. (see [4ASCEND | フリーゲーム投稿サイト unityroom](https://unityroom.com/games/4ascend))
 

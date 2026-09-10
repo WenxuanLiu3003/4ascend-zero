@@ -6,3 +6,8 @@
 *.sh
 adjustData.py
 adjust_model.py
+calc_match_elo.py
+match_results.txt
+*.svg
+.onnx_cache/
+*.onnx

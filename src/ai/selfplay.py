@@ -24,13 +24,14 @@ class SelfPlay:
     def __init__(self, model, encoder: AlphaZeroStateEncoder, engine: Engine,
                  board_size: int = 9, sims: int = 400, c_puct: float = 2.0,
                  device: str = "cpu", use_tree_reuse: bool = False):
-        self.model = model
+        from .inference import ensure_inference
+        self.model = ensure_inference(model)
         self.encoder = encoder
         self.engine = engine
         self.size = board_size
         self.sims = sims
         self.c_puct = c_puct
-        self.device = device
+        self.device = "cpu"
         self.use_tree_reuse = use_tree_reuse
 
     def play_one(self, init_state: GameState, temp_steps: int = 30,

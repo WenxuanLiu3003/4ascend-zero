@@ -14,3 +14,6 @@ torch
 torchvision
 torchaudio
 tqdm
+onnx==1.19.1
+onnxruntime==1.19.2
+filelock>=3.0

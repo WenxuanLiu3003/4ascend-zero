@@ -13,7 +13,7 @@ from ..core.board import Board
 from ..core.state import GameState
 from ..core.types import Player, Phase, Move
 from ..core.engine import Engine
-from ..utils.checkpoint import latest_checkpoint_path, load_checkpoint
+from ..utils.checkpoint import latest_checkpoint_path
 
 # 颜色与UI参数
 BG = (245, 245, 245)
@@ -34,46 +34,61 @@ STONE_R = 18         # 棋子半径
 PLANT_R = 6          # 植物小圆半径（最多画两个）
 GRID_EXT = 10        # 网格线向外延伸像素
 CLICK_TOL = 16       # 点击吸附到交叉点的容差（像素）
-RUN_MCTS_SIMS = 800 if torch.cuda.is_available() else 400
+RUN_MCTS_SIMS = 400
 
 
 class MCTSRunner:
-    def __init__(self, cfg: RulesConfig, engine: Engine):
-        # 延迟导入 AI 依赖，避免窗口创建前卡在 torch/cuda 初始化
-        import torch
+    def __init__(self, cfg: RulesConfig, engine: Engine, device: str = "cpu"):
+        # Model conversion/loading is deferred until the first search.
         from ..core.encoding import AlphaZeroStateEncoder
-        from ..ai.model import PolicyValueNet
-        from ..ai.mcts import MCTS
 
         self.cfg = cfg
         self.engine = engine
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        if device not in ("cpu", "cuda"):
+            raise ValueError("GUI device must be cpu or cuda")
+        self.device = device
         self.encoder = AlphaZeroStateEncoder(last_k=8)
-        self.model = PolicyValueNet(in_planes=self.encoder.num_planes, board_size=cfg.board_size).to(self.device)
-        self.mcts = MCTS(
-            self.model,
-            self.encoder,
-            self.engine,
-            board_size=cfg.board_size,
-            c_puct=2.0,
-            sims=RUN_MCTS_SIMS,
-            dirichlet_alpha=0.3,
-            dirichlet_eps=0.0,  # 推理建议关闭根噪声，保持稳定
-            device=self.device,
-        )
+        self.model = None
+        self.mcts = None
         self.loaded = False
         self.load_msg = "Model not loaded"
 
     def ensure_loaded(self):
         if self.loaded:
             return
+        from ..ai.mcts import MCTS
+        torch.set_num_threads(1)
         ckpt = latest_checkpoint_path("checkpoints")
+        search_class = MCTS
+        if self.device == "cuda":
+            if not torch.cuda.is_available():
+                raise RuntimeError("CUDA is unavailable; use --device cpu or a CUDA-capable PyTorch environment")
+            from ..ai.model import PolicyValueNet
+            from ..utils.checkpoint import load_checkpoint
+            self.model = PolicyValueNet(in_planes=self.encoder.num_planes, board_size=self.cfg.board_size)
+            if ckpt is not None:
+                load_checkpoint(ckpt, self.model, optimizer=None, map_location="cpu")
+            self.model = self.model.to("cuda").eval()
+
+            class GuiCudaMCTS(MCTS):
+                # This override is local to human-vs-AI GUI searches. Batch
+                # self-play and evaluation keep the base class's CPU behavior.
+                def _prepare_model(self, model, device):
+                    return model, "cuda"
+
+            search_class = GuiCudaMCTS
+        else:
+            from ..ai.inference import load_inference_checkpoint
+            self.model = load_inference_checkpoint(ckpt, board_size=self.cfg.board_size)
         if ckpt is not None:
-            load_checkpoint(ckpt, self.model, optimizer=None, map_location=self.device)
             self.load_msg = f"Loaded: {ckpt}"
         else:
             self.load_msg = "No checkpoint found, using random model"
         self.model.eval()
+        self.mcts = search_class(self.model, self.encoder, self.engine,
+                         board_size=self.cfg.board_size, c_puct=2.0,
+                         sims=800 if self.device == "cuda" else RUN_MCTS_SIMS,
+                         dirichlet_alpha=0.3, dirichlet_eps=0.0, device=self.device)
         self.loaded = True
 
     def best_moves(self, state: GameState, best_n: int = 5):
@@ -402,7 +417,11 @@ def main():
     parser = argparse.ArgumentParser(description="4ascend pygame app")
     parser.add_argument("--NoAutoRefresh", action="store_true", help="Disable plant auto-refresh on real moves")
     parser.add_argument("--best_n", type=int, default=5, help="Show top-n suggested moves when clicking Run")
+    parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu",
+                        help="GUI inference device; cuda uses PyTorch GPU (800 simulations), cpu uses the selected backend (400)")
     args = parser.parse_args()
+    if args.device == "cuda" and not torch.cuda.is_available():
+        parser.error("CUDA is unavailable; use --device cpu or a CUDA-capable PyTorch environment")
 
     pygame.init()
     # 配置规则
@@ -487,7 +506,7 @@ def main():
                     )
                     try:
                         if mcts_runner is None:
-                            mcts_runner = MCTSRunner(cfg, engine)
+                            mcts_runner = MCTSRunner(cfg, engine, device=args.device)
                         run_msg = "Running MCTS..."
                         draw_board(
                             screen, state, edit_mode, run_best_moves, run_busy, run_msg,

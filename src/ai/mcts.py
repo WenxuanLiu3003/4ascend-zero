@@ -60,10 +60,10 @@ class MCTS:
           - c_puct: hyperparameter controlling the exploration strength in UCT formula
           - sims: the number of simulations to run for each move
           - dirichlet_alpha/eps: hyperparameters controlling the Dirichlet noise to the root node to encourage exploration
-          - device: CPU or GPU for model inference
+          - device: retained for caller compatibility; inference always uses the selected CPU backend
           - reuse_tree: whether to reuse the search tree across moves (default False since the plant refreshing is random)
         """
-        self.model = model
+        self.model, self.device = self._prepare_model(model, device)
         self.model.eval()
         self.encoder = encoder
         self.engine = engine
@@ -72,8 +72,12 @@ class MCTS:
         self.sims = sims
         self.dir_alpha = dirichlet_alpha
         self.dir_eps = dirichlet_eps
-        self.device = device
         self.reuse_tree = reuse_tree
+
+    def _prepare_model(self, model, device):
+        """Default search stays on CPU; the interactive GUI has its own override."""
+        from .inference import ensure_inference
+        return ensure_inference(model), "cpu"
 
     def _legal_mask(self, s: GameState) -> np.ndarray:
         """

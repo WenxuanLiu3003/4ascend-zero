@@ -11,14 +11,13 @@ import torch
 from tqdm import tqdm
 
 from .ai.mcts import MCTS
-from .ai.model import PolicyValueNet
+from .ai.inference import InferenceModel, load_inference_checkpoint
 from .core.board import Board
 from .core.engine import Engine
 from .core.encoding import AlphaZeroStateEncoder
 from .core.rules import RulesConfig
 from .core.state import GameState
 from .core.types import Move, Player
-from .utils.checkpoint import load_checkpoint
 
 
 @dataclass(frozen=True)
@@ -71,8 +70,8 @@ def _select_action(pi: np.ndarray, state: GameState) -> int:
 
 
 def play_one_game(
-    model_black: PolicyValueNet,
-    model_white: PolicyValueNet,
+    model_black: InferenceModel,
+    model_white: InferenceModel,
     cfg: RulesConfig,
     sims: int,
     device: str,
@@ -137,25 +136,19 @@ def play_one_game(
     return _determine_winner(state)
 
 
-def _load_model(path: str, cfg: RulesConfig, device: str) -> PolicyValueNet:
-    encoder = AlphaZeroStateEncoder(last_k=8)
-    model = PolicyValueNet(in_planes=encoder.num_planes, board_size=cfg.board_size).to(device)
-    load_checkpoint(path, model, optimizer=None, map_location=device)
-    model.eval()
-    return model
+def _load_model(path: str, cfg: RulesConfig, device: str) -> InferenceModel:
+    return load_inference_checkpoint(path, board_size=cfg.board_size)
 
 
-def _release_model(model: Optional[PolicyValueNet], device: str) -> None:
+def _release_model(model: Optional[InferenceModel], device: str) -> None:
     if model is None:
         return
-    del model
-    if device == "cuda":
-        torch.cuda.empty_cache()
+    model.close()
 
 
 def play_match(
-    model_a: PolicyValueNet,
-    model_b: PolicyValueNet,
+    model_a: InferenceModel,
+    model_b: InferenceModel,
     path_a: str,
     path_b: str,
     cfg: RulesConfig,
@@ -208,11 +201,11 @@ def evaluate_all_models(
     pair_bar = tqdm(total=total_pairs, desc="Pair matches", unit="pair")
 
     for idx, path_a in enumerate(model_paths[:-1]):
-        model_a: Optional[PolicyValueNet] = None
+        model_a: Optional[InferenceModel] = None
         try:
             model_a = _load_model(path_a, cfg, device)
             for path_b in model_paths[idx + 1 :]:
-                model_b: Optional[PolicyValueNet] = None
+                model_b: Optional[InferenceModel] = None
                 start_t = time.perf_counter()
                 try:
                     model_b = _load_model(path_b, cfg, device)
@@ -288,7 +281,8 @@ def main() -> None:
     if args.games_per_color <= 0:
         raise ValueError("games_per_color must be positive.")
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "cpu"
+    torch.set_num_threads(1)
     cfg = RulesConfig(board_size=args.board_size, win_k=args.win_k, hp_max=args.hp_max)
 
     if not os.path.isdir(args.savePath):

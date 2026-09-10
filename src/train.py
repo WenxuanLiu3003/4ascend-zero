@@ -84,7 +84,7 @@ class AZLiteTrainer:
     # single-process self-play (default)
     def _self_play_batch_serial(self, games=8, sims=400) -> List[Tuple[np.ndarray, np.ndarray, int, float, float]]:
         sp = SelfPlay(self.model, self.encoder, self.engine, c_puct=2.5,
-                      board_size=self.cfg.board_size, sims=sims, device=self.device,
+                      board_size=self.cfg.board_size, sims=sims, device="cpu",
                       use_tree_reuse=self.reuse_tree)
         dataset = []
         for _ in tqdm(range(games), desc="Self-play games", unit="game"):
@@ -99,12 +99,18 @@ class AZLiteTrainer:
     # multiprocess self-play
     @staticmethod
     def _worker_self_play(payload):
-        state_dict, cfg_dict, sims, reuse_tree = payload
+        from .ai.inference import OnnxPolicyValue, PyTorchPolicyValue
+        model_source, threads, cfg_dict, sims, reuse_tree = payload
         encoder = AlphaZeroStateEncoder(last_k=8)
         engine = Engine(win_k=cfg_dict['win_k'])
-        model = PolicyValueNet(in_planes=encoder.num_planes, board_size=cfg_dict['board_size']).to('cpu')
-        model.load_state_dict(state_dict)
-        model.eval()
+        torch.set_num_threads(1)
+        if isinstance(model_source, dict):
+            weights = PolicyValueNet(in_planes=encoder.num_planes, board_size=cfg_dict['board_size'])
+            weights.load_state_dict(model_source, strict=True)
+            model = PyTorchPolicyValue(weights)
+            del weights
+        else:
+            model = OnnxPolicyValue(model_source, threads=threads)
         sp = SelfPlay(model, encoder, engine, board_size=cfg_dict['board_size'],
                       sims=sims, device='cpu', use_tree_reuse=reuse_tree)
         s = GameState(cfg=RulesConfig(**cfg_dict), board=Board(cfg_dict['board_size']))
@@ -118,7 +124,15 @@ class AZLiteTrainer:
         if self.num_workers <= 0:
             return self._self_play_batch_serial(games=games, sims=sims)
 
-        state_dict = {k: v.cpu() for k, v in self.model.state_dict().items()}
+        from .ai.inference import ensure_onnx, inference_threads, inference_backend
+        if inference_backend() == "onnx":
+            threads = inference_threads(workers=self.num_workers)
+            runner = ensure_onnx(self.model, threads=threads)
+            model_source = runner.path
+            del runner
+        else:
+            threads = 1
+            model_source = {k: v.detach().cpu().clone() for k, v in self.model.state_dict().items()}
         cfg_dict = {
             'board_size': self.cfg.board_size,
             'win_k': self.cfg.win_k,
@@ -130,7 +144,7 @@ class AZLiteTrainer:
             'ad_attacker_hp_delta_on_success': self.cfg.ad_attacker_hp_delta_on_success,
             'ad_defender_hp_delta_on_success': self.cfg.ad_defender_hp_delta_on_success,
         }
-        tasks = [(state_dict, cfg_dict, sims, self.reuse_tree) for _ in range(games)]
+        tasks = [(model_source, threads, cfg_dict, sims, self.reuse_tree) for _ in range(games)]
         dataset = []
         with mp.get_context("spawn").Pool(processes=self.num_workers) as pool:
             for out in tqdm(pool.imap_unordered(self._worker_self_play, tasks),
@@ -261,10 +275,10 @@ def _delete_dataset_files(dataset_dir: str) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="training parameters")
     parser.add_argument('--epoch', type=int, default=1, help='Number of training epochs')
-    parser.add_argument('--sim', type=int, default=1600, help='Number of simulations')
+    parser.add_argument('--sim', type=int, default=2400, help='Number of simulations')
     default_save_path = os.environ.get("ASCEND_CHECKPOINT_DIR", "checkpoints")
     parser.add_argument('--savePath', type=str, default=default_save_path, help='model path')
-    parser.add_argument('--game', type=int, default=100, help='Number of games per epoch')
+    parser.add_argument('--game', type=int, default=80, help='Number of games per epoch')
     parser.add_argument('--batch', type=int, default=2048, help='Number of batch')
     parser.add_argument('--playOnly', action='store_true', help='Only run self-play and save datasets')
     parser.add_argument('--trainOnly', action='store_true', help='Only train using datasets on disk')
@@ -281,7 +295,9 @@ if __name__ == "__main__":
     if args.trainFileChunk <= 0:
         raise ValueError("trainFileChunk must be > 0.")
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "cpu" if args.playOnly else ("cuda" if torch.cuda.is_available() else "cpu")
+    if args.playOnly:
+        torch.set_num_threads(1)
     if not __IF__DEBUG__:
         if device == "cuda":
             print("using %s as device." % torch.cuda.get_device_name(torch.cuda.current_device()))
