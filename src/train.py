@@ -278,7 +278,7 @@ if __name__ == "__main__":
     parser.add_argument('--sim', type=int, default=2400, help='Number of simulations')
     default_save_path = os.environ.get("ASCEND_CHECKPOINT_DIR", "checkpoints")
     parser.add_argument('--savePath', type=str, default=default_save_path, help='model path')
-    parser.add_argument('--game', type=int, default=80, help='Number of games per epoch')
+    parser.add_argument('--game', type=int, default=60, help='Number of games per epoch')
     parser.add_argument('--batch', type=int, default=2048, help='Number of batch')
     parser.add_argument('--playOnly', action='store_true', help='Only run self-play and save datasets')
     parser.add_argument('--trainOnly', action='store_true', help='Only train using datasets on disk')
